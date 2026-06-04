@@ -80,24 +80,36 @@ export default function MultimodalPage() {
     setLoading(true)
     setResult('')
 
-    await new Promise(r => setTimeout(r, 1800))
+    try {
+      if (mode === 'generate') {
+        const { data } = await multimodalAPI.generateImage({
+          prompt: prompt,
+          style: 'photorealistic',
+          size: '512x512',
+        })
+        setResult(data.image_url || data.image_path)
+      } else {
+        const formData = new FormData()
+        formData.append('file', file)
 
-    if (mode === 'generate') {
-      setResult('https://picsum.photos/seed/aistudio/512/512')
-    } else {
-      const text = mockResults[mode] || 'Processing complete.'
-      setLoading(false)
-      let i = 0
-      const interval = setInterval(() => {
-        if (i < text.length) {
-          setResult(prev => prev + text[i++])
-        } else {
-          clearInterval(interval)
+        if (mode === 'ocr') {
+          const { data } = await multimodalAPI.extractOCR(formData)
+          setResult(data.text || 'No text extracted')
+        } else if (mode === 'caption') {
+          const { data } = await multimodalAPI.captionImage(formData)
+          const objectsStr = data.objects_detected ? `\n\nDetected objects: ${data.objects_detected.join(', ')}` : ''
+          const tagsStr = data.tags ? `\nTags: ${data.tags.join(', ')}` : ''
+          setResult(`${data.caption}${objectsStr}${tagsStr}`)
+        } else if (mode === 'transcribe') {
+          const { data } = await multimodalAPI.transcribeAudio(formData)
+          setResult(data.text || 'No speech transcribed')
         }
-      }, 8)
-      return
+      }
+    } catch (err) {
+      toast.error('AI processing failed')
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   const copyResult = () => {

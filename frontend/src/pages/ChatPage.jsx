@@ -17,26 +17,13 @@ const MODELS = [
   { id: 'deepseek', label: 'DeepSeek' },
 ]
 
-const mockConversations = [
-  { id: '1', title: 'Data analysis helper', created_at: new Date() },
-  { id: '2', title: 'Python code review', created_at: new Date() },
-  { id: '3', title: 'ML model questions', created_at: new Date() },
-]
-
-const mockMessages = {
-  '1': [
-    { id: 'm1', role: 'user', content: 'Can you help me analyze my sales dataset?' },
-    { id: 'm2', role: 'assistant', content: 'Of course! I can help you analyze your sales dataset. Could you share the dataset or describe its structure? I can help with:\n\n- **Exploratory Data Analysis (EDA)** — distributions, trends, outliers\n- **Statistical summaries** — mean, median, variance\n- **Visualizations** — charts and graphs\n- **Predictive modeling** — forecasting future sales\n\nWhat would you like to focus on?' },
-  ],
-}
-
 export default function ChatPage() {
   const { id: urlId } = useParams()
   const navigate = useNavigate()
   const {
     conversations, activeConversationId, messages, isStreaming,
-    selectedModel, setActiveConversation, addConversation,
-    setMessages, addMessage, appendToLastMessage, setStreaming, setModel
+    selectedModel, setActiveConversation, setConversations, addConversation,
+    removeConversation, setMessages, addMessage, appendToLastMessage, setStreaming, setModel
   } = useChatStore()
 
   const [input, setInput] = useState('')
@@ -44,19 +31,38 @@ export default function ChatPage() {
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
 
-  // Initialize with mock data
-  useEffect(() => {
-    if (conversations.length === 0) {
-      mockConversations.forEach(c => addConversation(c))
-      Object.entries(mockMessages).forEach(([id, msgs]) => setMessages(id, msgs))
-      setActiveConversation('1')
+  const fetchConversations = async () => {
+    try {
+      const { data } = await chatAPI.getConversations()
+      setConversations(data)
+      if (data.length > 0 && !urlId) {
+        setActiveConversation(data[0].id)
+        navigate(`/chat/${data[0].id}`)
+      }
+    } catch (err) {
+      toast.error('Failed to load chat history')
     }
+  }
+
+  useEffect(() => {
+    fetchConversations()
   }, [])
 
   useEffect(() => {
-    if (urlId) setActiveConversation(urlId)
-    else if (conversations.length > 0) setActiveConversation(conversations[0]?.id)
-  }, [urlId])
+    if (urlId) {
+      setActiveConversation(urlId)
+      if (!messages[urlId]) {
+        chatAPI.getMessages(urlId).then(({ data }) => {
+          setMessages(urlId, data)
+        }).catch(() => {
+          toast.error('Failed to load messages')
+        })
+      }
+    } else if (conversations.length > 0) {
+      setActiveConversation(conversations[0]?.id)
+      navigate(`/chat/${conversations[0]?.id}`)
+    }
+  }, [urlId, conversations.length])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -69,41 +75,78 @@ export default function ChatPage() {
     const text = input.trim()
     setInput('')
 
-    const userMsg = { id: Date.now().toString(), role: 'user', content: text }
-    addMessage(activeConversationId, userMsg)
+    let activeId = activeConversationId
+    if (!activeId) {
+      // Create a conversation first
+      try {
+        const { data } = await chatAPI.createConversation({
+          title: text.slice(0, 30) + (text.length > 30 ? '...' : ''),
+          model: selectedModel,
+        })
+        addConversation(data)
+        activeId = data.id
+        setActiveConversation(activeId)
+        navigate(`/chat/${activeId}`)
+      } catch (err) {
+        toast.error('Failed to start new chat')
+        return
+      }
+    }
 
-    const aiMsg = { id: (Date.now() + 1).toString(), role: 'assistant', content: '' }
-    addMessage(activeConversationId, aiMsg)
+    const userMsg = { id: Date.now().toString(), role: 'user', content: text }
+    addMessage(activeId, userMsg)
+
+    const assistantMsgId = (Date.now() + 1).toString()
+    const assistantMsg = { id: assistantMsgId, role: 'assistant', content: '' }
+    addMessage(activeId, assistantMsg)
     setStreaming(true)
 
-    // Simulate streaming response
-    const response = simulateAIResponse(text)
-    let i = 0
-    const interval = setInterval(() => {
-      if (i < response.length) {
-        appendToLastMessage(activeConversationId, response[i])
-        i++
-      } else {
-        clearInterval(interval)
-        setStreaming(false)
+    try {
+      await chatAPI.streamMessage(
+        activeId,
+        { content: text, model: selectedModel, temperature: 0.7, max_tokens: 2048 },
+        (chunk) => {
+          if (chunk.token) {
+            appendToLastMessage(activeId, chunk.token)
+          }
+        },
+        () => {
+          setStreaming(false)
+          chatAPI.getConversations().then(({ data }) => setConversations(data))
+        }
+      )
+    } catch (err) {
+      toast.error('Connection lost')
+      setStreaming(false)
+    }
+  }
+
+  const deleteChat = async (chatId) => {
+    try {
+      await chatAPI.deleteConversation(chatId)
+      removeConversation(chatId)
+      toast.success('Conversation deleted')
+      if (activeConversationId === chatId) {
+        setActiveConversation(null)
+        navigate('/chat')
       }
-    }, 15)
+    } catch (err) {
+      toast.error('Failed to delete conversation')
+    }
   }
 
-  const simulateAIResponse = (prompt) => {
-    const responses = [
-      `That's a great question! Let me think through this carefully.\n\n**Here's my analysis:**\n\nBased on your input, I can provide several insights:\n\n1. **Key consideration**: The context you've provided gives me a good foundation\n2. **Approach**: I'll break this down systematically\n3. **Recommendation**: Start with the fundamentals\n\nWould you like me to go deeper on any particular aspect?`,
-      `I understand what you're looking for. Here's a comprehensive breakdown:\n\n\`\`\`python\n# Example code\ndef analyze_data(df):\n    summary = df.describe()\n    return summary\n\`\`\`\n\nThis approach handles the most common cases and scales well.`,
-      `Excellent point! Let me elaborate on that...\n\nThe key factors to consider are:\n- **Performance**: Optimized for speed and accuracy\n- **Scalability**: Handles large datasets efficiently  \n- **Interpretability**: Results are easy to understand\n\nI hope this helps clarify things!`,
-    ]
-    return responses[Math.floor(Math.random() * responses.length)]
-  }
-
-  const newChat = () => {
-    const id = Date.now().toString()
-    addConversation({ id, title: 'New conversation', created_at: new Date() })
-    setActiveConversation(id)
-    navigate(`/chat/${id}`)
+  const newChat = async () => {
+    try {
+      const { data } = await chatAPI.createConversation({
+        title: 'New conversation',
+        model: selectedModel,
+      })
+      addConversation(data)
+      setActiveConversation(data.id)
+      navigate(`/chat/${data.id}`)
+    } catch (err) {
+      toast.error('Failed to create new conversation')
+    }
   }
 
   const handleKeyDown = (e) => {
@@ -114,7 +157,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full w-full">
       {/* Conversations Sidebar */}
       <div className="w-60 flex-shrink-0 flex flex-col h-full"
         style={{ borderRight: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
@@ -125,17 +168,29 @@ export default function ChatPage() {
         </div>
         <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
           {conversations.map((conv) => (
-            <button
+            <div
               key={conv.id}
-              onClick={() => { setActiveConversation(conv.id); navigate(`/chat/${conv.id}`) }}
-              className={`w-full text-left px-3 py-2.5 rounded-lg text-xs transition-colors truncate ${activeConversationId === conv.id ? 'active-conv' : ''}`}
+              className={`group w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs transition-colors ${activeConversationId === conv.id ? 'active-conv' : ''}`}
               style={{
                 background: activeConversationId === conv.id ? 'var(--accent-muted)' : 'transparent',
-                color: activeConversationId === conv.id ? 'var(--accent-primary)' : 'var(--text-secondary)',
               }}
             >
-              {conv.title}
-            </button>
+              <button
+                onClick={() => { setActiveConversation(conv.id); navigate(`/chat/${conv.id}`) }}
+                className="flex-1 text-left truncate font-medium mr-2"
+                style={{
+                  color: activeConversationId === conv.id ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                }}
+              >
+                {conv.title}
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); deleteChat(conv.id) }}
+                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-red-400 transition-opacity"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
           ))}
         </div>
       </div>

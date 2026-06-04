@@ -1,20 +1,21 @@
-import { useState, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useDropzone } from 'react-dropzone'
 import {
   Upload, File, FileText, Table, Image, Mic, Archive,
-  Trash2, Eye, Play, Search, Filter, X, CheckCircle,
-  Clock, AlertCircle, MoreHorizontal
+  Trash2, Eye, Play, Search, X, CheckCircle,
+  Clock, AlertCircle, Loader
 } from 'lucide-react'
 import { useDatasetStore } from '../store'
+import { datasetAPI } from '../services/api'
 import toast from 'react-hot-toast'
 
 const fileTypeIcon = (type) => {
-  if (['csv', 'xlsx'].includes(type)) return Table
-  if (['pdf', 'txt', 'docx'].includes(type)) return FileText
-  if (['jpg', 'png', 'jpeg'].includes(type)) return Image
-  if (['mp3', 'wav'].includes(type)) return Mic
+  if (['csv', 'xlsx', 'xls'].includes(type)) return Table
+  if (['pdf', 'txt', 'docx', 'md', 'json'].includes(type)) return FileText
+  if (['jpg', 'png', 'jpeg', 'webp', 'gif'].includes(type)) return Image
+  if (['mp3', 'wav', 'm4a'].includes(type)) return Mic
   if (type === 'zip') return Archive
   return File
 }
@@ -28,15 +29,8 @@ const statusBadge = (status) => {
   }
 }
 
-const mockDatasets = [
-  { id: '1', name: 'customer_churn.csv', type: 'csv', size: 2400000, rows: 10000, cols: 24, status: 'ready', created_at: '2024-01-15' },
-  { id: '2', name: 'product_reviews.xlsx', type: 'xlsx', size: 5600000, rows: 50000, cols: 8, status: 'ready', created_at: '2024-01-14' },
-  { id: '3', name: 'knowledge_base.pdf', type: 'pdf', size: 1200000, rows: null, cols: null, status: 'ready', created_at: '2024-01-13' },
-  { id: '4', name: 'training_images.zip', type: 'zip', size: 150000000, rows: 5000, cols: null, status: 'processing', created_at: '2024-01-12' },
-  { id: '5', name: 'support_tickets.txt', type: 'txt', size: 800000, rows: 3200, cols: null, status: 'ready', created_at: '2024-01-11' },
-]
-
 const formatSize = (bytes) => {
+  if (!bytes) return '0 KB'
   if (bytes > 1e9) return `${(bytes / 1e9).toFixed(1)} GB`
   if (bytes > 1e6) return `${(bytes / 1e6).toFixed(1)} MB`
   return `${(bytes / 1e3).toFixed(0)} KB`
@@ -44,55 +38,82 @@ const formatSize = (bytes) => {
 
 export default function DatasetsPage() {
   const navigate = useNavigate()
-  const { datasets, addDataset, removeDataset, uploadProgress } = useDatasetStore()
+  const { datasets, setDatasets, addDataset, removeDataset } = useDatasetStore()
+  const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [search, setSearch] = useState('')
-  const [allDatasets] = useState(mockDatasets)
   const [showUpload, setShowUpload] = useState(false)
+
+  const fetchDatasets = async () => {
+    try {
+      setLoading(true)
+      const { data } = await datasetAPI.list()
+      setDatasets(data)
+    } catch (err) {
+      toast.error('Failed to load datasets')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchDatasets()
+  }, [])
 
   const onDrop = useCallback(async (acceptedFiles) => {
     setUploading(true)
     for (const file of acceptedFiles) {
-      const id = Date.now().toString()
-      const ext = file.name.split('.').pop().toLowerCase()
-
-      // Simulate upload
-      const newDs = {
-        id,
-        name: file.name,
-        type: ext,
-        size: file.size,
-        rows: null,
-        cols: null,
-        status: 'processing',
-        created_at: new Date().toISOString().split('T')[0],
+      const formData = new FormData()
+      formData.append('file', file)
+      try {
+        const { data } = await datasetAPI.upload(formData)
+        addDataset(data)
+        toast.success(`${file.name} uploaded successfully!`)
+      } catch (err) {
+        toast.error(`Upload failed for ${file.name}: ${err.response?.data?.detail || err.message}`)
       }
-      addDataset(newDs)
-      toast.success(`Uploading ${file.name}...`)
-
-      // Simulate processing
-      setTimeout(() => {
-        toast.success(`${file.name} processed successfully`)
-      }, 3000)
     }
     setUploading(false)
     setShowUpload(false)
-  }, [])
+  }, [addDataset])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
       'text/csv': ['.csv'],
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+      'application/vnd.ms-excel': ['.xls'],
       'application/pdf': ['.pdf'],
       'text/plain': ['.txt'],
       'application/zip': ['.zip'],
-      'image/*': ['.jpg', '.jpeg', '.png'],
-      'audio/*': ['.mp3', '.wav'],
+      'image/*': ['.jpg', '.jpeg', '.png', '.webp'],
+      'audio/*': ['.mp3', '.wav', '.m4a'],
     },
   })
 
-  const displayed = [...allDatasets, ...datasets].filter(d =>
+  const handleDelete = async (id, name, e) => {
+    e.stopPropagation()
+    try {
+      await datasetAPI.delete(id)
+      removeDataset(id)
+      toast.success(`${name} deleted`)
+    } catch (err) {
+      toast.error(`Failed to delete: ${err.response?.data?.detail || err.message}`)
+    }
+  }
+
+  const handleReprocess = async (id, e) => {
+    e.stopPropagation()
+    try {
+      await datasetAPI.process(id, {})
+      toast.success('Reprocessing scheduled')
+      fetchDatasets()
+    } catch (err) {
+      toast.error(`Failed to reprocess: ${err.response?.data?.detail || err.message}`)
+    }
+  }
+
+  const displayed = datasets.filter(d =>
     d.name.toLowerCase().includes(search.toLowerCase())
   )
 
@@ -141,13 +162,22 @@ export default function DatasetsPage() {
                 className={`upload-zone p-8 text-center cursor-pointer ${isDragActive ? 'drag-active' : ''}`}
               >
                 <input {...getInputProps()} />
-                <Upload size={32} className="mx-auto mb-3" style={{ color: 'var(--accent-primary)' }} />
-                <p className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
-                  {isDragActive ? 'Drop files here' : 'Drag & drop files'}
-                </p>
-                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                  or click to browse
-                </p>
+                {uploading ? (
+                  <div className="space-y-2">
+                    <Loader size={32} className="mx-auto animate-spin" style={{ color: 'var(--accent-primary)' }} />
+                    <p className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>Uploading to server...</p>
+                  </div>
+                ) : (
+                  <>
+                    <Upload size={32} className="mx-auto mb-3" style={{ color: 'var(--accent-primary)' }} />
+                    <p className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+                      {isDragActive ? 'Drop files here' : 'Drag & drop files'}
+                    </p>
+                    <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                      or click to browse
+                    </p>
+                  </>
+                )}
                 <div className="flex flex-wrap justify-center gap-1.5 mt-4">
                   {['CSV', 'XLSX', 'PDF', 'TXT', 'DOCX', 'JPG', 'MP3', 'ZIP'].map(t => (
                     <span key={t} className="badge badge-violet text-xs">{t}</span>
@@ -160,94 +190,142 @@ export default function DatasetsPage() {
       </AnimatePresence>
 
       {/* Search */}
-      <div className="flex gap-3">
-        <div className="relative flex-1 max-w-sm">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
-          <input
-            className="input-base pl-9"
-            placeholder="Search datasets..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+      {datasets.length > 0 && (
+        <div className="flex gap-3">
+          <div className="relative flex-1 max-w-sm">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
+            <input
+              className="input-base pl-9"
+              placeholder="Search datasets..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Datasets Table */}
-      <div className="card overflow-hidden">
-        {/* Table header */}
-        <div className="flex items-center gap-4 px-4 py-3 text-xs font-semibold"
-          style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
-          <div className="flex-1">Name</div>
-          <div className="w-20">Type</div>
-          <div className="w-24">Size</div>
-          <div className="w-20">Rows</div>
-          <div className="w-24">Status</div>
-          <div className="w-24">Date</div>
-          <div className="w-20">Actions</div>
-        </div>
-
-        {displayed.map((ds, i) => {
-          const Icon = fileTypeIcon(ds.type)
-          return (
-            <motion.div
-              key={ds.id}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: i * 0.04 }}
-              className="flex items-center gap-4 px-4 py-3 cursor-pointer"
-              style={{ borderBottom: '1px solid var(--border-subtle)' }}
-              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-tertiary)'}
-              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-              onClick={() => navigate(`/datasets/${ds.id}`)}
-            >
-              <div className="flex-1 flex items-center gap-3 min-w-0">
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                  style={{ background: 'var(--bg-tertiary)' }}>
-                  <Icon size={14} style={{ color: 'var(--accent-primary)' }} />
+      {/* Datasets Content */}
+      {loading ? (
+        <div className="grid grid-cols-1 gap-3">
+          {[1, 2, 3].map((n) => (
+            <div key={n} className="h-16 w-full rounded-xl animate-pulse card flex items-center justify-between px-4">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-slate-700/50" />
+                <div className="space-y-1.5">
+                  <div className="h-3 w-40 rounded bg-slate-700/50" />
+                  <div className="h-2.5 w-20 rounded bg-slate-700/50" />
                 </div>
-                <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
-                  {ds.name}
-                </span>
               </div>
-              <div className="w-20">
-                <span className="badge badge-violet text-xs uppercase">{ds.type}</span>
-              </div>
-              <div className="w-24 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                {formatSize(ds.size)}
-              </div>
-              <div className="w-20 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                {ds.rows?.toLocaleString() || '—'}
-              </div>
-              <div className="w-24">{statusBadge(ds.status)}</div>
-              <div className="w-24 text-xs" style={{ color: 'var(--text-muted)' }}>
-                {ds.created_at}
-              </div>
-              <div className="w-20 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                <button
-                  onClick={() => navigate(`/datasets/${ds.id}`)}
-                  className="p-1.5 rounded transition-colors"
-                  style={{ color: 'var(--text-muted)' }}
-                  onMouseEnter={(e) => e.currentTarget.style.color = 'var(--accent-primary)'}
-                  onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
-                  title="View"
-                >
-                  <Eye size={13} />
-                </button>
-                <button
-                  onClick={() => toast.success('Processing started')}
-                  className="p-1.5 rounded transition-colors"
-                  style={{ color: 'var(--text-muted)' }}
-                  onMouseEnter={(e) => e.currentTarget.style.color = '#10b981'}
-                  onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
-                  title="Process"
-                >
-                  <Play size={13} />
-                </button>
-              </div>
-            </motion.div>
-          )
-        })}
-      </div>
+              <div className="h-4 w-24 rounded bg-slate-700/50" />
+            </div>
+          ))}
+        </div>
+      ) : datasets.length === 0 ? (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex flex-col items-center justify-center p-12 text-center card min-h-[300px] space-y-4"
+        >
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: 'var(--accent-muted)' }}>
+            <Upload size={28} style={{ color: 'var(--accent-primary)' }} />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>No Datasets Uploaded</h3>
+            <p className="text-sm max-w-sm" style={{ color: 'var(--text-muted)' }}>
+              Upload your CSV, Excel, PDF, or text files to begin. The system will perform automatic EDA and structure your data.
+            </p>
+          </div>
+          <button onClick={() => setShowUpload(true)} className="btn-primary mt-2">
+            <Upload size={14} /> Upload First Dataset
+          </button>
+        </motion.div>
+      ) : (
+        <div className="card overflow-hidden">
+          {/* Table header */}
+          <div className="flex items-center gap-4 px-4 py-3 text-xs font-semibold"
+            style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+            <div className="flex-1">Name</div>
+            <div className="w-20">Type</div>
+            <div className="w-24">Size</div>
+            <div className="w-20">Rows</div>
+            <div className="w-24">Status</div>
+            <div className="w-24">Date</div>
+            <div className="w-20 text-right">Actions</div>
+          </div>
+
+          {displayed.map((ds, i) => {
+            const Icon = fileTypeIcon(ds.file_type)
+            return (
+              <motion.div
+                key={ds.id}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: i * 0.04 }}
+                className="flex items-center gap-4 px-4 py-3 cursor-pointer"
+                style={{ borderBottom: '1px solid var(--border-subtle)' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-tertiary)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                onClick={() => navigate(`/datasets/${ds.id}`)}
+              >
+                <div className="flex-1 flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                    style={{ background: 'var(--bg-tertiary)' }}>
+                    <Icon size={14} style={{ color: 'var(--accent-primary)' }} />
+                  </div>
+                  <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                    {ds.name}
+                  </span>
+                </div>
+                <div className="w-20">
+                  <span className="badge badge-violet text-xs uppercase">{ds.file_type}</span>
+                </div>
+                <div className="w-24 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  {formatSize(ds.size_bytes)}
+                </div>
+                <div className="w-20 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  {ds.rows?.toLocaleString() || '—'}
+                </div>
+                <div className="w-24">{statusBadge(ds.status)}</div>
+                <div className="w-24 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {ds.created_at ? new Date(ds.created_at).toLocaleDateString() : '—'}
+                </div>
+                <div className="w-20 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    onClick={() => navigate(`/datasets/${ds.id}`)}
+                    className="p-1.5 rounded transition-colors"
+                    style={{ color: 'var(--text-muted)' }}
+                    onMouseEnter={(e) => e.currentTarget.style.color = 'var(--accent-primary)'}
+                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
+                    title="View"
+                  >
+                    <Eye size={13} />
+                  </button>
+                  <button
+                    onClick={(e) => handleReprocess(ds.id, e)}
+                    className="p-1.5 rounded transition-colors"
+                    style={{ color: 'var(--text-muted)' }}
+                    onMouseEnter={(e) => e.currentTarget.style.color = '#10b981'}
+                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
+                    title="Process"
+                  >
+                    <Play size={13} />
+                  </button>
+                  <button
+                    onClick={(e) => handleDelete(ds.id, ds.name, e)}
+                    className="p-1.5 rounded transition-colors"
+                    style={{ color: 'var(--text-muted)' }}
+                    onMouseEnter={(e) => e.currentTarget.style.color = '#ef4444'}
+                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
+                    title="Delete"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </motion.div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

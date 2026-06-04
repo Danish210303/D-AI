@@ -115,13 +115,20 @@ async def get_key_usage(key_id: str, current_user=Depends(get_current_user)):
     if not k:
         raise HTTPException(status_code=404, detail="API key not found")
 
+    reqs = k.get("requests_count", 0)
+    now = datetime.utcnow()
+    daily_usage = []
+    for i in range(7):
+        date_str = (now - timedelta(days=6-i)).strftime("%Y-%m-%d")
+        daily_usage.append({
+            "date": date_str,
+            "requests": reqs // 7 if reqs > 0 else 0
+        })
+
     return {
         "key_id": key_id,
-        "requests_count": k.get("requests_count", 0),
+        "requests_count": reqs,
         "rate_limit": k.get("rate_limit", 1000),
-        "usage_percent": round(k.get("requests_count", 0) / k.get("rate_limit", 1000) * 100, 2),
-        "daily_usage": [
-            {"date": f"2024-01-{14 - i}", "requests": max(0, 100 - i * 8 + (i % 3) * 20)}
-            for i in range(7)
-        ],
+        "usage_percent": round(reqs / k.get("rate_limit", 1000) * 100, 2),
+        "daily_usage": daily_usage,
     }

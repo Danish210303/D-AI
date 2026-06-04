@@ -47,8 +47,11 @@ export const useChatStore = create((set, get) => ({
   setStreaming: (v) => set({ isStreaming: v }),
   setModel: (m) => set({ selectedModel: m }),
 
+  setConversations: (conversations) => set({ conversations }),
   addConversation: (conv) =>
     set((s) => ({ conversations: [conv, ...s.conversations] })),
+  removeConversation: (id) =>
+    set((s) => ({ conversations: s.conversations.filter((c) => c.id !== id) })),
 
   updateConversation: (id, updates) =>
     set((s) => ({
