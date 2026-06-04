@@ -182,6 +182,27 @@ async def read_dataset_context(dataset_id: str, db) -> str:
         return f"[Error loading context file: {str(e)}]"
 
 
+@router.get("/health/ollama")
+async def check_ollama_health(current_user=Depends(get_current_user)):
+    """Check connectivity to Ollama and list loaded models"""
+    try:
+        client = AsyncClient(host=settings.OLLAMA_BASE_URL)
+        models_list = await client.list()
+        return {
+            "status": "connected",
+            "host": settings.OLLAMA_BASE_URL,
+            "models": [m.get("model") for m in models_list.get("models", [])],
+        }
+    except Exception as e:
+        openai_status = "configured" if settings.OPENAI_API_KEY else "not_configured"
+        return {
+            "status": "disconnected",
+            "host": settings.OLLAMA_BASE_URL,
+            "error": str(e),
+            "fallback_openai": openai_status
+        }
+
+
 @router.post("/conversations/{conversation_id}/stream")
 async def stream_message(
     conversation_id: str,
@@ -269,41 +290,71 @@ Answer:"""
                         assistant_content += token
                         yield f"data: {json.dumps({'token': token})}\n\n"
 
-            # 4. Save AI Response to MongoDB
-            if assistant_content:
-                ai_msg = {
-                    "role": "assistant",
-                    "content": assistant_content,
-                    "conversation_id": conversation_id,
-                    "user_id": str(current_user["_id"]),
-                    "created_at": datetime.utcnow(),
-                }
-                await db.messages.insert_one(ai_msg)
+        except Exception as ollama_err:
+            err_str = str(ollama_err)
+            logger.warning(f"Ollama streaming failed: {err_str}. Checking OpenAI fallback...")
 
-                # Update conversation message count and updated_at
-                await db.conversations.update_one(
-                    {"_id": conversation_id},
-                    {"$set": {"updated_at": datetime.utcnow()}, "$inc": {"message_count": 2}}
-                )
-            yield "data: [DONE]\n\n"
+            # Fall back to OpenAI if key is present
+            if settings.OPENAI_API_KEY and not settings.OPENAI_API_KEY.startswith("sk-..."):
+                try:
+                    info_msg = "[System: Local Ollama is offline. Falling back to OpenAI (gpt-4o-mini)...]\n\n"
+                    yield f"data: {json.dumps({'token': info_msg})}\n\n"
 
-        except Exception as e:
-            err_str = str(e)
-            logger.error(f"Ollama streaming error: {err_str}")
-            if "ConnectionRefusedError" in err_str or "ConnectError" in err_str or "connect" in err_str.lower():
-                err_msg = f"Connection Error: Local Ollama is offline at {settings.OLLAMA_BASE_URL}. Please start Ollama or verify it is running."
-            elif "not found" in err_str.lower():
-                err_msg = f"Model Error: Selected model '{data.model or 'llama3'}' was not found. Run 'ollama pull {data.model or 'llama3'}' to download it."
+                    from openai import AsyncOpenAI
+                    openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+                    
+                    openai_history = [{"role": m["role"], "content": m["content"]} for m in history]
+
+                    stream = await openai_client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=openai_history,
+                        temperature=data.temperature,
+                        max_tokens=data.max_tokens,
+                        stream=True
+                    )
+
+                    async for chunk in stream:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            token = chunk.choices[0].delta.content
+                            assistant_content += token
+                            yield f"data: {json.dumps({'token': token})}\n\n"
+
+                except Exception as openai_err:
+                    err_msg = f"Connection Error: Local Ollama is offline, and OpenAI fallback failed: {str(openai_err)}"
+                    logger.error(err_msg)
+                    yield f"data: {json.dumps({'token': err_msg})}\n\n"
             else:
-                err_msg = f"Ollama Error: {err_str}"
-            yield f"data: {json.dumps({'token': err_msg})}\n\n"
-            yield "data: [DONE]\n\n"
+                if "ConnectionRefusedError" in err_str or "ConnectError" in err_str or "connect" in err_str.lower() or "attempts failed" in err_str.lower():
+                    err_msg = f"Connection Error: Local Ollama is offline at {settings.OLLAMA_BASE_URL}. Please start Ollama locally, or configure a valid OPENAI_API_KEY for automatic cloud fallback."
+                elif "not found" in err_str.lower():
+                    err_msg = f"Model Error: Selected model '{data.model or 'llama3'}' was not found. Run 'ollama pull {data.model or 'llama3'}' to download it."
+                else:
+                    err_msg = f"Ollama Error: {err_str}"
+                yield f"data: {json.dumps({'token': err_msg})}\n\n"
+
+        # 4. Save AI Response to MongoDB
+        if assistant_content:
+            ai_msg = {
+                "role": "assistant",
+                "content": assistant_content,
+                "conversation_id": conversation_id,
+                "user_id": str(current_user["_id"]),
+                "created_at": datetime.utcnow(),
+            }
+            await db.messages.insert_one(ai_msg)
+
+            # Update conversation message count and updated_at
+            await db.conversations.update_one(
+                {"_id": conversation_id},
+                {"$set": {"updated_at": datetime.utcnow()}, "$inc": {"message_count": 2}}
+            )
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 async def get_ollama_response(prompt: str, conv_id: str, db) -> str:
-    """Non-streaming Ollama response using AsyncClient"""
+    """Non-streaming Ollama response using AsyncClient with OpenAI fallback"""
     try:
         client = AsyncClient(host=settings.OLLAMA_BASE_URL)
         response = await client.chat(
@@ -313,5 +364,18 @@ async def get_ollama_response(prompt: str, conv_id: str, db) -> str:
         )
         return response.get("message", {}).get("content", "")
     except Exception as e:
-        logger.warning(f"Ollama not available: {e}")
+        logger.warning(f"Ollama non-streaming failed: {e}. Trying OpenAI fallback...")
+        if settings.OPENAI_API_KEY and not settings.OPENAI_API_KEY.startswith("sk-..."):
+            try:
+                from openai import AsyncOpenAI
+                openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+                res = await openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    stream=False
+                )
+                return res.choices[0].message.content or ""
+            except Exception as openai_err:
+                logger.error(f"OpenAI fallback failed: {openai_err}")
+
         return f"Error: Local Ollama is offline or model is not loaded. Details: {str(e)}"

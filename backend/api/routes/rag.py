@@ -224,7 +224,22 @@ Answer:"""
         )
         answer = res.get("response", "")
     except Exception as e:
-        answer = f"Ollama is not running locally. Details: {str(e)}\n\nHere is the retrieved document context:\n\n{context}\n\n(Note: Connect locally running Ollama model to generate a compiled response)"
+        logger.warning(f"Ollama RAG generate failed: {e}. Trying OpenAI fallback...")
+        if settings.OPENAI_API_KEY and not settings.OPENAI_API_KEY.startswith("sk-..."):
+            try:
+                from openai import AsyncOpenAI
+                openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+                res = await openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    stream=False
+                )
+                answer = res.choices[0].message.content or ""
+            except Exception as openai_err:
+                logger.error(f"OpenAI fallback failed for RAG: {openai_err}")
+                answer = f"Ollama is not running locally and OpenAI fallback failed. Details: {str(e)}\n\nHere is the retrieved document context:\n\n{context}"
+        else:
+            answer = f"Ollama is not running locally. Details: {str(e)}\n\nHere is the retrieved document context:\n\n{context}\n\n(Note: Connect locally running Ollama model to generate a compiled response)"
 
     return {
         "answer": answer,
