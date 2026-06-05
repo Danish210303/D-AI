@@ -13,35 +13,42 @@ async def process_dataset(file_path: str, file_type: str) -> Dict[str, Any]:
 
 
 def _process_sync(file_path: str, file_type: str) -> Dict[str, Any]:
-    result = {"rows": None, "cols": None, "columns": [], "metadata": {}}
-
     if not os.path.exists(file_path):
-        return result
+        raise FileNotFoundError(f"Dataset file not found at: {file_path}")
 
-    try:
-        if file_type in ("csv",):
-            return _process_csv(file_path)
-        elif file_type in ("xlsx", "xls"):
-            return _process_excel(file_path)
-        elif file_type == "pdf":
-            return _process_pdf(file_path)
-        elif file_type in ("txt", "md"):
-            return _process_text(file_path)
-        elif file_type == "json":
-            return _process_json(file_path)
-        elif file_type in ("jpg", "jpeg", "png", "webp"):
-            return _process_image(file_path)
-        elif file_type in ("mp3", "wav", "m4a"):
-            return _process_audio(file_path)
-    except Exception as e:
-        logger.error(f"Processing error for {file_type}: {e}")
-
-    return result
+    if file_type in ("csv",):
+        return _process_csv(file_path)
+    elif file_type in ("xlsx", "xls"):
+        return _process_excel(file_path)
+    elif file_type == "pdf":
+        return _process_pdf(file_path)
+    elif file_type in ("txt", "md"):
+        return _process_text(file_path)
+    elif file_type == "json":
+        return _process_json(file_path)
+    elif file_type in ("jpg", "jpeg", "png", "webp"):
+        return _process_image(file_path)
+    elif file_type in ("mp3", "wav", "m4a"):
+        return _process_audio(file_path)
+    
+    raise ValueError(f"Unsupported file type: {file_type}")
 
 
 def _process_csv(path: str) -> Dict[str, Any]:
     import pandas as pd
-    df = pd.read_csv(path)
+    
+    encodings = ["utf-8", "latin-1", "utf-8-sig", "cp1252"]
+    df = None
+    for enc in encodings:
+        try:
+            df = pd.read_csv(path, encoding=enc)
+            break
+        except Exception:
+            continue
+            
+    if df is None:
+        df = pd.read_csv(path)
+        
     return {
         "rows": len(df),
         "cols": len(df.columns),
@@ -108,15 +115,30 @@ def _process_text(path: str) -> Dict[str, Any]:
 def _process_json(path: str) -> Dict[str, Any]:
     import json
     import pandas as pd
-    with open(path) as f:
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
         data = json.load(f)
-    if isinstance(data, list) and data and isinstance(data[0], dict):
-        df = pd.DataFrame(data)
+    if isinstance(data, list):
+        if data and isinstance(data[0], dict):
+            df = pd.DataFrame(data)
+            return {
+                "rows": len(df),
+                "cols": len(df.columns),
+                "columns": list(df.columns),
+                "metadata": {"type": "array_of_objects"},
+            }
+        else:
+            return {
+                "rows": len(data),
+                "cols": 1,
+                "columns": ["Value"],
+                "metadata": {"type": "array"},
+            }
+    elif isinstance(data, dict):
         return {
-            "rows": len(df),
-            "cols": len(df.columns),
-            "columns": list(df.columns),
-            "metadata": {},
+            "rows": 1,
+            "cols": len(data.keys()),
+            "columns": list(data.keys()),
+            "metadata": {"type": "object"},
         }
     return {"rows": None, "cols": None, "columns": [], "metadata": {}}
 

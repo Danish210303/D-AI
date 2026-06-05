@@ -9,94 +9,153 @@ logger = logging.getLogger(__name__)
 
 
 async def start_training_job(job_id: str, model_id: str, config: Dict[str, Any], db):
-    """Simulate or run actual training job"""
+    """Run actual training job for tabular datasets or fall back to simulation"""
+    import os
+    import pickle
+    import pandas as pd
+    import numpy as np
+    from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score, f1_score, mean_squared_error, r2_score
+
     try:
         logger.info(f"Starting training job {job_id}")
         await _log(db, job_id, f"Training started: {config.get('name')}")
-        await _log(db, job_id, f"Base model: {config.get('base_model')}")
-        await _log(db, job_id, f"Technique: {config.get('technique')}")
-        await _log(db, job_id, f"Dataset: {config.get('dataset_id')}")
+        
+        # Load dataset metadata
+        dataset_id = config.get("dataset_id")
+        dataset = await db.datasets.find_one({"_id": dataset_id})
+        if not dataset:
+            raise ValueError(f"Dataset {dataset_id} not found")
 
-        epochs = config.get("epochs", 3)
-        steps_per_epoch = 50  # Simulated
+        file_path = dataset.get("file_path")
+        file_type = dataset.get("file_type")
 
-        for epoch in range(1, epochs + 1):
-            await _log(db, job_id, f"=== Epoch {epoch}/{epochs} ===")
+        # If it's a tabular dataset and exists on disk
+        if file_type in ("csv", "xlsx", "xls") and file_path and os.path.exists(file_path):
+            await _log(db, job_id, f"Loading tabular dataset: {dataset['name']}")
+            
+            # Load data
+            if file_type == "csv":
+                df = None
+                for enc in ["utf-8", "latin-1", "utf-8-sig", "cp1252"]:
+                    try:
+                        df = pd.read_csv(file_path, encoding=enc)
+                        break
+                    except Exception:
+                        continue
+                if df is None:
+                    df = pd.read_csv(file_path)
+            else:
+                df = pd.read_excel(file_path)
 
-            for step in range(1, steps_per_epoch + 1):
-                # Check if stopped
-                job = await db.training_jobs.find_one({"_id": job_id})
-                if job and job.get("status") == "stopped":
-                    await _log(db, job_id, "Training stopped by user")
-                    await db.models.update_one(
-                        {"_id": model_id},
-                        {"$set": {"status": "stopped"}}
-                    )
-                    return
+            await _log(db, job_id, f"Dataset loaded. Shape: {df.shape}")
 
-                progress = ((epoch - 1) * steps_per_epoch + step) / (epochs * steps_per_epoch) * 100
-                train_loss = 2.3 * math.exp(-progress / 40) + 0.1 + (0.02 * (1 - progress / 100))
-                val_loss = train_loss + 0.05
+            # Identify target column: default to the last column (excluding 'Id', 'ID' if present)
+            target_col = config.get("target_column")
+            if not target_col or target_col not in df.columns:
+                possible_targets = [c for c in df.columns if c.lower() not in ('id', 'index')]
+                target_col = possible_targets[-1] if possible_targets else df.columns[-1]
 
-                await db.training_jobs.update_one(
-                    {"_id": job_id},
-                    {"$set": {
-                        "progress": round(progress, 1),
-                        "current_epoch": epoch,
-                        "current_step": (epoch - 1) * steps_per_epoch + step,
-                        "train_loss": round(train_loss, 4),
-                        "val_loss": round(val_loss, 4),
-                    }}
-                )
+            await _log(db, job_id, f"Target column identified: '{target_col}'")
 
-                if step % 10 == 0:
-                    await _log(
-                        db, job_id,
-                        f"Epoch {epoch} | Step {step}/{steps_per_epoch} | "
-                        f"loss={train_loss:.4f} | val_loss={val_loss:.4f}"
-                    )
+            # Drop 'Id' and target column to get features
+            features = [c for c in df.columns if c != target_col and c.lower() not in ('id', 'index')]
+            
+            X = df[features].copy()
+            y = df[target_col].copy()
 
-                await asyncio.sleep(0.1)
+            # Handle missing values
+            for col in X.columns:
+                if X[col].isnull().any():
+                    if X[col].dtype in (np.float64, np.int64):
+                        X[col] = X[col].fillna(X[col].median())
+                    else:
+                        X[col] = X[col].fillna(X[col].mode()[0] if not X[col].mode().empty else "unknown")
 
-            await _log(db, job_id, f"Epoch {epoch} complete | train_loss={train_loss:.4f}")
+            # Handle categorical features (simple label encoding)
+            categorical_cols = X.select_dtypes(exclude=[np.number]).columns
+            for col in categorical_cols:
+                X[col] = X[col].astype(str).factorize()[0]
 
-        # Final metrics
-        final_accuracy = 0.85 + (0.1 * (1 - math.exp(-epochs / 3)))
-        final_f1 = final_accuracy - 0.01
-        metrics = {
-            "accuracy": round(final_accuracy, 4),
-            "f1_score": round(final_f1, 4),
-            "precision": round(final_f1 + 0.005, 4),
-            "recall": round(final_f1 - 0.005, 4),
-        }
+            # Drop rows with missing target values
+            valid_y = y.notnull()
+            X = X[valid_y]
+            y = y[valid_y]
 
-        # Mark job complete
-        await db.training_jobs.update_one(
-            {"_id": job_id},
-            {"$set": {
-                "status": "ready",
-                "progress": 100.0,
-                "metrics": metrics,
-                "completed_at": datetime.utcnow(),
-            }}
-        )
+            # Detect task type: classification or regression
+            is_classification = y.dtype in (object, bool) or y.nunique() <= 10
+            task_type = "classification" if is_classification else "regression"
+            await _log(db, job_id, f"Detected ML task: {task_type}")
 
-        # Update model
-        await db.models.update_one(
-            {"_id": model_id},
-            {"$set": {
-                "status": "ready",
-                "accuracy": metrics["accuracy"],
-                "f1_score": metrics["f1_score"],
-                "trained_at": datetime.utcnow(),
-            }}
-        )
+            # Split data
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-        await _log(db, job_id, f"Training complete! Accuracy: {metrics['accuracy']:.2%} | F1: {metrics['f1_score']:.4f}")
-        logger.info(f"Training job {job_id} completed successfully")
+            # Train model
+            if is_classification:
+                model = RandomForestClassifier(n_estimators=100, random_state=42)
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                acc = float(accuracy_score(y_test, y_pred))
+                f1 = float(f1_score(y_test, y_pred, average="weighted", zero_division=0))
+                metrics = {"accuracy": acc, "f1_score": f1}
+            else:
+                model = RandomForestRegressor(n_estimators=100, random_state=42)
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                mse = float(mean_squared_error(y_test, y_pred))
+                r2 = float(r2_score(y_test, y_pred))
+                metrics = {"r2_score": r2, "rmse": float(np.sqrt(mse)), "accuracy": float(max(0.0, r2))}
+
+            await _log(db, job_id, f"Model trained. Metrics: {metrics}")
+
+            # Save model to models_store
+            from config import settings
+            model_dir = os.path.join(settings.UPLOAD_DIR, "../models_store", model_id)
+            os.makedirs(model_dir, exist_ok=True)
+            model_path = os.path.join(model_dir, "model.pkl")
+
+            with open(model_path, "wb") as f:
+                pickle.dump({
+                    "model": model,
+                    "features": features,
+                    "target_column": target_col,
+                    "task": task_type,
+                    "categorical_cols": list(categorical_cols),
+                    "is_classification": is_classification,
+                    "classes": list(model.classes_) if is_classification else None
+                }, f)
+
+            await _log(db, job_id, "Model binaries saved successfully.")
+
+            # Update collections
+            await db.training_jobs.update_one(
+                {"_id": job_id},
+                {"$set": {
+                    "status": "ready",
+                    "progress": 100.0,
+                    "metrics": metrics,
+                    "completed_at": datetime.utcnow(),
+                }}
+            )
+
+            await db.models.update_one(
+                {"_id": model_id},
+                {"$set": {
+                    "status": "ready",
+                    "accuracy": metrics.get("accuracy", 0.0),
+                    "f1_score": metrics.get("f1_score", 0.0),
+                    "trained_at": datetime.utcnow(),
+                    "size_bytes": os.path.getsize(model_path),
+                }}
+            )
+        else:
+            await _log(db, job_id, "Dataset not found locally or is non-tabular. Running simulation...")
+            await run_simulation(job_id, model_id, config, db)
 
     except Exception as e:
         logger.error(f"Training job {job_id} failed: {e}")
+        await _log(db, job_id, f"Error: {str(e)}", "ERROR")
         await db.training_jobs.update_one(
             {"_id": job_id},
             {"$set": {"status": "error", "error": str(e), "completed_at": datetime.utcnow()}}

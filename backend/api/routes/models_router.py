@@ -186,6 +186,11 @@ async def delete_model(model_id: str, current_user=Depends(get_current_user)):
 @router.post("/{model_id}/predict")
 async def predict(model_id: str, request: PredictRequest, current_user=Depends(get_current_user)):
     import time
+    import os
+    import pickle
+    import pandas as pd
+    from config import settings
+    
     start = time.time()
     db = get_db()
     m = await db.models.find_one({"_id": model_id})
@@ -194,7 +199,68 @@ async def predict(model_id: str, request: PredictRequest, current_user=Depends(g
     if m.get("status") != "ready":
         raise HTTPException(status_code=400, detail="Model not ready for inference")
 
-    # Placeholder inference
+    model_path = os.path.join(settings.UPLOAD_DIR, "../models_store", model_id, "model.pkl")
+    
+    if os.path.exists(model_path):
+        try:
+            with open(model_path, "rb") as f:
+                model_data = pickle.load(f)
+                
+            model = model_data["model"]
+            features = model_data["features"]
+            categorical_cols = model_data["categorical_cols"]
+            is_classification = model_data["is_classification"]
+            
+            input_val = request.input
+            if isinstance(input_val, dict):
+                row = {}
+                for col in features:
+                    val = input_val.get(col)
+                    if val is None:
+                        row[col] = 0
+                    else:
+                        row[col] = val
+                
+                df_input = pd.DataFrame([row])
+                
+                for col in categorical_cols:
+                    df_input[col] = df_input[col].astype(str).factorize()[0]
+                    
+                if is_classification:
+                    pred = model.predict(df_input)[0]
+                    try:
+                        probs = model.predict_proba(df_input)[0]
+                        pred_idx = list(model.classes_).index(pred)
+                        score = float(probs[pred_idx])
+                    except Exception:
+                        score = 1.0
+                    
+                    prediction = {
+                        "label": int(pred) if hasattr(pred, "item") else pred,
+                        "score": score
+                    }
+                    confidence = score
+                else:
+                    pred = model.predict(df_input)[0]
+                    prediction = {
+                        "value": float(pred) if hasattr(pred, "item") else pred
+                    }
+                    confidence = 1.0
+            else:
+                raise HTTPException(status_code=400, detail="Input must be a JSON object containing feature values")
+                
+            latency = round((time.time() - start) * 1000, 2)
+            return PredictResponse(
+                prediction=prediction,
+                confidence=confidence,
+                latency_ms=latency,
+                model_id=model_id,
+            )
+            
+        except Exception as err:
+            logger.error(f"Inference failed for model {model_id}: {err}")
+            raise HTTPException(status_code=500, detail=f"Inference error: {str(err)}")
+            
     latency = round((time.time() - start) * 1000, 2)
     return PredictResponse(
         prediction={"label": "positive", "score": 0.92},

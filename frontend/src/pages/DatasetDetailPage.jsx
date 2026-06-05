@@ -152,8 +152,8 @@ Provide a concise, professional analysis and recommend actions.`
         <AlertCircle size={48} style={{ color: '#ef4444' }} />
         <div className="space-y-1">
           <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Processing Failed</h3>
-          <p className="text-sm max-w-sm" style={{ color: 'var(--text-muted)' }}>
-            An error occurred while attempting to parse or process this file.
+          <p className="text-xs max-w-md border border-dashed rounded-lg p-3 mt-2 bg-red-500/10 text-red-400 font-mono text-left break-all" style={{ borderColor: 'rgba(239, 68, 68, 0.2)' }}>
+            {dataset.error_message || 'An error occurred while attempting to parse or process this file.'}
           </p>
         </div>
         <button onClick={handleReprocess} className="btn-primary">

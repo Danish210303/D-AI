@@ -237,9 +237,25 @@ Answer:"""
                 answer = res.choices[0].message.content or ""
             except Exception as openai_err:
                 logger.error(f"OpenAI fallback failed for RAG: {openai_err}")
-                answer = f"Ollama is not running locally and OpenAI fallback failed. Details: {str(e)}\n\nHere is the retrieved document context:\n\n{context}"
+                if results:
+                    fallback_msg = (
+                        "🤖 **Note: LLM server is currently offline.** Here is the direct matching content retrieved from your dataset:\n\n"
+                    )
+                    for idx, r in enumerate(results):
+                        fallback_msg += f"**Chunk {idx+1} (Source: `{r.source}`, Similarity Score: `{r.score}`)**:\n> {r.content}\n\n"
+                    answer = fallback_msg
+                else:
+                    answer = f"Connection Error: LLM server is offline, and no grounding context is available. Details: {str(openai_err)}"
         else:
-            answer = f"Ollama is not running locally. Details: {str(e)}\n\nHere is the retrieved document context:\n\n{context}\n\n(Note: Connect locally running Ollama model to generate a compiled response)"
+            if results:
+                fallback_msg = (
+                    "🤖 **Note: LLM server is currently offline.** Here is the direct matching content retrieved from your dataset:\n\n"
+                )
+                for idx, r in enumerate(results):
+                    fallback_msg += f"**Chunk {idx+1} (Source: `{r.source}`, Similarity Score: `{r.score}`)**:\n> {r.content}\n\n"
+                answer = fallback_msg
+            else:
+                answer = f"Connection Error: Local Ollama is offline at {settings.OLLAMA_BASE_URL} and no OpenAI key is configured. Please start Ollama locally or configure a valid API key."
 
     return {
         "answer": answer,

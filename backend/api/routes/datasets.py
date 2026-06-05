@@ -33,6 +33,7 @@ def fmt_dataset(d: dict) -> dict:
         "created_at": d.get("created_at", datetime.utcnow()),
         "processed_at": d.get("processed_at"),
         "metadata": d.get("metadata"),
+        "error_message": d.get("error_message"),
     }
 
 
@@ -199,15 +200,80 @@ async def get_preview(
             return {"columns": [], "rows": []}
 
         if ext == "csv":
-            df = pd.read_csv(path, nrows=rows)
+            df = None
+            for enc in ["utf-8", "latin-1", "utf-8-sig", "cp1252"]:
+                try:
+                    df = pd.read_csv(path, nrows=rows, encoding=enc)
+                    break
+                except Exception:
+                    continue
+            if df is None:
+                df = pd.read_csv(path, nrows=rows)
+            return {
+                "columns": list(df.columns),
+                "rows": df.fillna("").head(rows).to_dict("records")
+            }
         elif ext in ["xlsx", "xls"]:
             df = pd.read_excel(path, nrows=rows)
+            return {
+                "columns": list(df.columns),
+                "rows": df.fillna("").head(rows).to_dict("records")
+            }
+        elif ext in ["txt", "md"]:
+            lines = []
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                for i in range(rows):
+                    line = f.readline()
+                    if not line:
+                        break
+                    lines.append({"Line": i + 1, "Content": line.strip()})
+            return {
+                "columns": ["Line", "Content"],
+                "rows": lines
+            }
+        elif ext == "pdf":
+            import PyPDF2
+            pages = []
+            with open(path, "rb") as f:
+                reader = PyPDF2.PdfReader(f)
+                num_pages = min(len(reader.pages), rows)
+                for page_num in range(num_pages):
+                    text = reader.pages[page_num].extract_text()
+                    pages.append({
+                        "Page": page_num + 1,
+                        "Content": text[:1000] + "..." if text and len(text) > 1000 else (text or "")
+                    })
+            return {
+                "columns": ["Page", "Content"],
+                "rows": pages
+            }
+        elif ext == "json":
+            import json
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                if data and isinstance(data[0], dict):
+                    df = pd.DataFrame(data[:rows])
+                    return {
+                        "columns": list(df.columns),
+                        "rows": df.fillna("").to_dict("records")
+                    }
+                else:
+                    return {
+                        "columns": ["Value"],
+                        "rows": [{"Value": str(item)} for item in data[:rows]]
+                    }
+            elif isinstance(data, dict):
+                return {
+                    "columns": ["Key", "Value"],
+                    "rows": [{"Key": k, "Value": str(v)} for k, v in list(data.items())[:rows]]
+                }
+            else:
+                return {
+                    "columns": ["Value"],
+                    "rows": [{"Value": str(data)}]
+                }
         else:
-            return {"columns": [], "rows": [], "message": "Preview not available for this file type"}
-
-        return {
-            "columns": list(df.columns),
-            "rows": df.fillna("").head(rows).to_dict("records")
-        }
+            return {"columns": [], "rows": [], "message": f"Preview not available for file type .{ext}"}
     except Exception as e:
         return {"columns": [], "rows": [], "error": str(e)}
