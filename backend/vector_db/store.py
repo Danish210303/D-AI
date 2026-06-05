@@ -26,13 +26,35 @@ class VectorStore:
             self._init_faiss()
 
     def _init_chroma(self):
-        import chromadb
-        self._client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
-        self._collection = self._client.get_or_create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
-        logger.info(f"ChromaDB collection '{self.collection_name}' ready")
+        from services.chroma_service import ChromaManager
+        self._client = ChromaManager.get_client()
+        
+        # get_or_create_collection can also trigger database lock, run with sync retry loop
+        max_attempts = 5
+        delay = 2.0
+        import time
+        for attempt in range(max_attempts):
+            try:
+                self._collection = self._client.get_or_create_collection(
+                    name=self.collection_name,
+                    metadata={"hnsw:space": "cosine"},
+                )
+                logger.info(f"ChromaDB collection '{self.collection_name}' ready")
+                return
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "database is locked" in err_msg or "db is locked" in err_msg or "code: 5" in err_msg or "locked" in err_msg:
+                    if attempt < max_attempts - 1:
+                        logger.warning(
+                            f"ChromaDB collection init locked (attempt {attempt + 1}/{max_attempts}). "
+                            f"Retrying in {delay} seconds..."
+                        )
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"ChromaDB collection init locked. Max attempts reached. Error: {e}")
+                        raise
+                else:
+                    raise
 
     def _init_faiss(self):
         try:
@@ -46,7 +68,7 @@ class VectorStore:
             logger.warning("FAISS not installed; using mock")
             self._index = None
 
-    def add_documents(
+    async def add_documents(
         self,
         documents: List[str],
         embeddings: List[List[float]],
@@ -59,12 +81,15 @@ class VectorStore:
             metadatas = [{} for _ in documents]
 
         if self.backend == "chroma" and self._collection:
-            self._collection.add(
-                documents=documents,
-                embeddings=embeddings,
-                metadatas=metadatas,
-                ids=ids,
-            )
+            from services.chroma_service import run_with_retry_async
+            def op():
+                self._collection.add(
+                    documents=documents,
+                    embeddings=embeddings,
+                    metadatas=metadatas,
+                    ids=ids,
+                )
+            await run_with_retry_async(op)
         elif self.backend == "faiss" and self._index is not None:
             import numpy as np
             arr = np.array(embeddings, dtype="float32")
@@ -75,16 +100,19 @@ class VectorStore:
             )
         return len(documents)
 
-    def query(
+    async def query(
         self,
         query_embedding: List[float],
         top_k: int = 5,
     ) -> List[Dict[str, Any]]:
         if self.backend == "chroma" and self._collection:
-            results = self._collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k,
-            )
+            from services.chroma_service import run_with_retry_async
+            def op():
+                return self._collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=top_k,
+                )
+            results = await run_with_retry_async(op)
             out = []
             for i in range(len(results["ids"][0])):
                 out.append({
@@ -108,13 +136,17 @@ class VectorStore:
 
         return []
 
-    def delete(self, ids: List[str]):
+    async def delete(self, ids: List[str]):
         if self.backend == "chroma" and self._collection:
-            self._collection.delete(ids=ids)
+            from services.chroma_service import run_with_retry_async
+            def op():
+                self._collection.delete(ids=ids)
+            await run_with_retry_async(op)
 
-    def count(self) -> int:
+    async def count(self) -> int:
         if self.backend == "chroma" and self._collection:
-            return self._collection.count()
+            from services.chroma_service import run_with_retry_async
+            return await run_with_retry_async(self._collection.count)
         elif self.backend == "faiss" and self._index:
             return self._index.ntotal
         return 0

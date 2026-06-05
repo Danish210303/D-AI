@@ -274,7 +274,7 @@ async def ensure_dataset_indexed(dataset_id: str, db) -> str:
         try:
             from vector_db.store import VectorStore
             store = VectorStore(backend=index.get("index_type", "chroma"), collection_name=str(index["_id"]))
-            if store.count() > 0:
+            if await store.count() > 0:
                 return str(index["_id"])
             logger.info(f"Index {index['_id']} is ready in DB but empty in vector store (possibly process restart with mock). Rebuilding...")
         except Exception as e:
@@ -307,7 +307,7 @@ async def ensure_dataset_indexed(dataset_id: str, db) -> str:
         index_id = str(result.inserted_id)
 
     # Build index synchronously to guarantee it is indexed when queried
-    from api.routes.rag import _build_index
+    from services.rag_service import _build_index
     try:
         await _build_index(index_id, {
             "chunk_size": 512,
@@ -354,7 +354,7 @@ async def stream_message(
             # Ensure dataset is indexed synchronously
             index_id = await ensure_dataset_indexed(data.dataset_id, db)
             
-            from api.routes.rag import query_vector_store
+            from services.rag_service import query_vector_store
             results = await query_vector_store(index_id, data.content, top_k=3, db=db)
         except Exception as e:
             logger.error(f"Error ensuring dataset is indexed or querying vector store: {e}")
@@ -386,7 +386,7 @@ async def stream_message(
                 logger.error(f"Fallback text search also failed: {fallback_err}")
     elif data.index_id:
         try:
-            from api.routes.rag import query_vector_store
+            from services.rag_service import query_vector_store
             results = await query_vector_store(data.index_id, data.content, top_k=3, db=db)
         except Exception as e:
             logger.error(f"Error querying vector store: {e}")
