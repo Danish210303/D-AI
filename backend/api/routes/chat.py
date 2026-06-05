@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from datetime import datetime
 from typing import List, Optional
@@ -327,7 +327,8 @@ async def ensure_dataset_indexed(dataset_id: str, db) -> str:
 async def stream_message(
     conversation_id: str,
     data: StreamRequest,
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
+    request: Request = None
 ):
     db = get_db()
 
@@ -443,7 +444,29 @@ async def stream_message(
         )
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(generate_response(), media_type="text/event-stream")
+    origin = request.headers.get("origin") if request is not None else None
+    allowed_origins = [
+        "https://d-ai-nu.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:5173"
+    ]
+    
+    response = StreamingResponse(generate_response(), media_type="text/event-stream")
+    
+    is_allowed = False
+    if origin:
+        if origin in allowed_origins or (origin.startswith("https://") and origin.endswith(".vercel.app")):
+            is_allowed = True
+            
+    if is_allowed:
+        response.headers["Access-Control-Allow-Origin"] = origin
+    else:
+        response.headers["Access-Control-Allow-Origin"] = "https://d-ai-nu.vercel.app"
+        
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    return response
 
 
 async def get_ollama_response(prompt: str, conv_id: str, db) -> str:

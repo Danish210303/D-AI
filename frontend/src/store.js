@@ -5,13 +5,19 @@ export const useAuthStore = create(
   persist(
     (set, get) => ({
       user: null,
-      token: null,
-      refreshToken: null,
-      isAuthenticated: false,
-      setAuth: (user, token, refreshToken) =>
-        set({ user, token, refreshToken, isAuthenticated: true }),
-      logout: () =>
-        set({ user: null, token: null, refreshToken: null, isAuthenticated: false }),
+      token: localStorage.getItem("access_token") || null,
+      refreshToken: localStorage.getItem("refresh_token") || null,
+      isAuthenticated: !!(localStorage.getItem("access_token") || null),
+      setAuth: (user, token, refreshToken) => {
+        localStorage.setItem("access_token", token)
+        localStorage.setItem("refresh_token", refreshToken)
+        set({ user, token, refreshToken, isAuthenticated: true })
+      },
+      logout: () => {
+        localStorage.removeItem("access_token")
+        localStorage.removeItem("refresh_token")
+        set({ user: null, token: null, refreshToken: null, isAuthenticated: false })
+      },
       updateUser: (updates) =>
         set({ user: { ...get().user, ...updates } }),
     }),

@@ -10,7 +10,7 @@ const api = axios.create({
 
 // Request interceptor
 api.interceptors.request.use((config) => {
-  const { token } = useAuthStore.getState()
+  const token = localStorage.getItem("access_token") || useAuthStore.getState().token
   if (token) {
     if (config.headers.set) {
       config.headers.set('Authorization', `Bearer ${token}`)
@@ -28,7 +28,8 @@ api.interceptors.response.use(
     const original = err.config
     if (err.response?.status === 401 && !original._retry) {
       original._retry = true
-      const { refreshToken, setAuth, logout } = useAuthStore.getState()
+      const refreshToken = localStorage.getItem("refresh_token") || useAuthStore.getState().refreshToken
+      const { setAuth, logout } = useAuthStore.getState()
       if (refreshToken) {
         try {
           const { data } = await axios.post(`${BASE_URL}/auth/refresh`, {
@@ -73,7 +74,9 @@ export const chatAPI = {
   getMessages: (id) => api.get(`/chat/conversations/${id}/messages`),
   sendMessage: (id, data) => api.post(`/chat/conversations/${id}/messages`, data),
   streamMessage: (id, data, onChunk, onDone) => {
-    const { token, refreshToken, setAuth, logout } = useAuthStore.getState()
+    const token = localStorage.getItem("access_token") || useAuthStore.getState().token
+    const refreshToken = localStorage.getItem("refresh_token") || useAuthStore.getState().refreshToken
+    const { setAuth, logout } = useAuthStore.getState()
     
     const executeFetch = (accessToken) => {
       return fetch(`${BASE_URL}/chat/conversations/${id}/stream`, {

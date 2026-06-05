@@ -52,10 +52,16 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex="https?://.*",
+    allow_origins=[
+        "https://d-ai-nu.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:5173"
+    ],
+    allow_origin_regex="https://.*\\.vercel\\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -67,19 +73,31 @@ async def log_requests(request: Request, call_next):
     if request.method == "HEAD" and request.url.path in ("/", "/api/health"):
         return await call_next(request)
 
+    origin = request.headers.get("origin")
+    auth_header = request.headers.get("authorization")
+    masked_auth = f"{auth_header[:25]}..." if auth_header and len(auth_header) > 25 else ("Bearer Present" if auth_header else "None")
+    logger.info(f"Incoming Request: {request.method} {request.url.path} | Origin: {origin} | Auth: {masked_auth}")
+
     start = time.time()
-    response = await call_next(request)
-    duration = round((time.time() - start) * 1000, 2)
+    try:
+        response = await call_next(request)
+        duration = round((time.time() - start) * 1000, 2)
 
-    # Filter out 404 noise from crawlers/bots
-    if response.status_code == 404:
-        if request.url.path.startswith(PREFIX) or request.url.path == "/":
-            logger.warning(f"404 Not Found: {request.method} {request.url.path}")
-    else:
-        logger.info(f"{request.method} {request.url.path} → {response.status_code} ({duration}ms)")
+        # Filter out 404 noise from crawlers/bots
+        if response.status_code == 404:
+            if request.url.path.startswith(PREFIX) or request.url.path == "/":
+                logger.warning(f"404 Not Found: {request.method} {request.url.path}")
+        else:
+            logger.info(
+                f"{request.method} {request.url.path} → {response.status_code} ({duration}ms) | "
+                f"CORS Allow-Origin: {response.headers.get('access-control-allow-origin')}"
+            )
 
-    response.headers["X-Process-Time"] = str(duration)
-    return response
+        response.headers["X-Process-Time"] = str(duration)
+        return response
+    except Exception as e:
+        logger.error(f"Request failed: {request.method} {request.url.path} | Error: {e}")
+        raise
 
 
 # ─── Exception Handlers ───────────────────────────────────────────────────────

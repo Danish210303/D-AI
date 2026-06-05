@@ -51,15 +51,18 @@ def decode_token(token: str) -> Dict[str, Any]:
         # Try primary secret key first (access tokens)
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
-    except JWTError:
+    except JWTError as e:
+        logger.warning(f"JWT access token decode failed: {e}")
         try:
             # Fallback to refresh token secret key (refresh tokens)
-            payload = jwt.decode(token, settings.JWT_REFRESH_SECRET, algorithms=[settings.ALGORITHM])
+            secret = settings.JWT_REFRESH_SECRET or settings.SECRET_KEY
+            payload = jwt.decode(token, secret, algorithms=[settings.ALGORITHM])
             return payload
-        except JWTError:
+        except JWTError as re:
+            logger.error(f"JWT validation failure: Both access and refresh tokens failed decoding. Details: {re}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired token",
+                detail=f"Invalid or expired token: {str(re)}",
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
