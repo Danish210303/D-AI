@@ -453,6 +453,11 @@ async def stream_message(
     
     response = StreamingResponse(generate_response(), media_type="text/event-stream")
     
+    # Set standard SSE stream control headers to prevent buffering and caching
+    response.headers["Cache-Control"] = "no-cache, no-transform"
+    response.headers["Connection"] = "keep-alive"
+    response.headers["X-Accel-Buffering"] = "no"
+    
     is_allowed = False
     if origin:
         if origin in allowed_origins or (origin.startswith("https://") and origin.endswith(".vercel.app")):

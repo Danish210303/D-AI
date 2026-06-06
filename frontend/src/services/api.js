@@ -46,10 +46,12 @@ api.interceptors.response.use(
         } catch (refreshErr) {
           logout()
           window.location.href = '/login'
+          return Promise.reject(refreshErr)
         }
       } else {
         logout()
         window.location.href = '/login'
+        return Promise.reject(err)
       }
     }
     return Promise.reject(err)
@@ -92,14 +94,32 @@ export const chatAPI = {
     const handleStream = async (res) => {
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
+      let buffer = ''
+      
       while (true) {
         const { done, value } = await reader.read()
-        if (done) { onDone?.(); break }
-        const chunk = decoder.decode(value)
-        const lines = chunk.split('\n').filter(Boolean)
+        if (done) {
+          if (buffer.trim()) {
+            const trimmed = buffer.trim()
+            if (trimmed.startsWith('data: ')) {
+              const data = trimmed.slice(6).trim()
+              if (data !== '[DONE]') {
+                try { onChunk?.(JSON.parse(data)) } catch {}
+              }
+            }
+          }
+          onDone?.()
+          break
+        }
+        
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || '' // Keep the last incomplete line in the buffer
+        
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6)
+          const trimmed = line.trim()
+          if (trimmed.startsWith('data: ')) {
+            const data = trimmed.slice(6).trim()
             if (data === '[DONE]') { onDone?.(); return }
             try { onChunk?.(JSON.parse(data)) } catch {}
           }

@@ -50,20 +50,6 @@ app = FastAPI(
 
 # ─── Middleware ────────────────────────────────────────────────────────────────
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://d-ai-nu.vercel.app",
-        "http://localhost:3000",
-        "http://localhost:5173"
-    ],
-    allow_origin_regex="https://.*\\.vercel\\.app",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
-
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
@@ -98,6 +84,23 @@ async def log_requests(request: Request, call_next):
     except Exception as e:
         logger.error(f"Request failed: {request.method} {request.url.path} | Error: {e}")
         raise
+
+
+# Add CORSMiddleware last so that it is the outermost middleware in the ASGI stack.
+# This prevents headers from being stripped from StreamingResponse or during exceptions.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://d-ai-nu.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:5173"
+    ],
+    allow_origin_regex="https://.*\\.vercel\\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
 
 
 # ─── Exception Handlers ───────────────────────────────────────────────────────

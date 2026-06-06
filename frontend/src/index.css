@@ -173,6 +173,7 @@
     padding: 1px;
     background: var(--gradient-1);
     -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     -webkit-mask-composite: xor;
     mask-composite: exclude;
     pointer-events: none;
@@ -430,6 +431,7 @@
 /* Custom range input */
 input[type="range"] {
   -webkit-appearance: none;
+  appearance: none;
   height: 4px;
   background: var(--bg-tertiary);
   border-radius: 2px;
@@ -454,3 +456,8 @@ input[type="range"]::-webkit-slider-thumb {
 .table-striped > *:nth-child(even) {
   background: var(--bg-tertiary);
 }
+
+.bg-tertiary {
+  background-color: var(--bg-tertiary) !important;
+}
+
