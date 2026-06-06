@@ -133,150 +133,16 @@ async def send_message(
     return {"user": fmt_msg(user_msg), "assistant": fmt_msg(ai_msg)}
 
 
-def ensure_file_locally_present(dataset: dict) -> bool:
-    """Fallback helper kept for compatibility; downloads from GridFS if missing."""
-    import asyncio
-    try:
-        # Run download helper synchronously in context of a sync def
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If event loop is already running, run_coroutine_threadsafe
-            import threading
-            from concurrent.futures import Future
-            def run():
-                coro = download_file_from_gridfs(dataset)
-                return asyncio.run(coro)
-            # Just try downloading to block
-            import shutil
-            # Let's import download path
-        return True
-    except Exception:
-        return False
-
-
-async def download_file_from_gridfs(dataset_doc: dict) -> str:
-    """Download a dataset file from MongoDB GridFS to a temporary local path for processing"""
-    gridfs_id = dataset_doc.get("gridfs_id")
-    if not gridfs_id:
-        # Fallback to local file_path if it exists (for backward compatibility)
-        file_path = dataset_doc.get("file_path", "")
-        if file_path and os.path.exists(file_path):
-            return file_path
-        raise FileNotFoundError("Dataset has no GridFS file ID and local file is missing.")
-
-    import tempfile
-    from bson import ObjectId
-    from motor.motor_asyncio import AsyncIOMotorGridFSBucket
-    from database import get_db
-
-    db = get_db()
-    fs = AsyncIOMotorGridFSBucket(db._db)
-
-    # Use a unique temp path
-    ext = dataset_doc.get("file_type", "txt")
-    temp_dir = os.path.join(tempfile.gettempdir(), "personal-ai-studio")
-    os.makedirs(temp_dir, exist_ok=True)
-    temp_file_path = os.path.join(temp_dir, f"{gridfs_id}.{ext}")
-
-    # Read from GridFS bucket and write locally
-    grid_out = await fs.open_download_stream(ObjectId(gridfs_id))
-    with open(temp_file_path, "wb") as f:
-        while chunk := await grid_out.read(1024 * 1024):
-            f.write(chunk)
-
-    logger.info(f"Downloaded GridFS file {gridfs_id} to temp path {temp_file_path}")
-    return temp_file_path
-
-
-async def read_dataset_context(dataset_id: str, db) -> str:
-    """Reads dataset text/metadata to feed directly as immediate context from GridFS"""
-    dataset = await db.datasets.find_one({"_id": dataset_id})
-    if not dataset:
-        return ""
-    
-    temp_path = None
-    try:
-        temp_path = await download_file_from_gridfs(dataset)
-        file_type = dataset.get("file_type")
-        if not temp_path or not os.path.exists(temp_path):
-            return ""
-            
-        if file_type in ("txt", "md"):
-            with open(temp_path, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read(5000)
-            return content
-        elif file_type == "pdf":
-            text_parts = []
-            with open(temp_path, "rb") as f:
-                reader = PyPDF2.PdfReader(f)
-                for i in range(min(5, len(reader.pages))):
-                    page_text = reader.pages[i].extract_text()
-                    if page_text:
-                        text_parts.append(page_text)
-                    if sum(len(p) for p in text_parts) > 5000:
-                        break
-            return "\n".join(text_parts)[:5000]
-        elif file_type in ("csv", "xlsx", "xls"):
-            if file_type == "csv":
-                df = pd.read_csv(temp_path, nrows=50)
-            else:
-                df = pd.read_excel(temp_path, nrows=50)
-            
-            rows_str = []
-            for _, row in df.iterrows():
-                row_text = ", ".join([f"{col}: {val}" for col, val in row.items() if pd.notnull(val)])
-                rows_str.append(row_text)
-            return "\n".join(rows_str)[:5000]
-        elif file_type == "json":
-            with open(temp_path, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read(5000)
-            return content
-        else:
-            return f"[File type .{file_type} not directly readable as raw text context]"
-    except Exception as e:
-        logger.error(f"Error reading dataset context for {dataset_id}: {e}")
-        return f"[Error loading context file: {str(e)}]"
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                # Only clean up if it's indeed a temporary file
-                if dataset.get("gridfs_id") and str(dataset.get("gridfs_id")) in temp_path:
-                    os.remove(temp_path)
-            except Exception as clean_err:
-                logger.error(f"Failed to delete temp file {temp_path}: {clean_err}")
-
-
-@router.get("/health/ollama")
-async def check_ollama_health(current_user=Depends(get_current_user)):
-    """Check connectivity to Ollama and list loaded models"""
-    try:
-        client = AsyncClient(host=settings.OLLAMA_BASE_URL, headers={"bypass-tunnel-reminder": "true"})
-        models_list = await client.list()
-        return {
-            "status": "connected",
-            "host": settings.OLLAMA_BASE_URL,
-            "models": [m.get("model") for m in models_list.get("models", [])],
-        }
-    except Exception as e:
-        openai_status = "configured" if settings.OPENAI_API_KEY else "not_configured"
-        return {
-            "status": "disconnected",
-            "host": settings.OLLAMA_BASE_URL,
-            "error": str(e),
-            "fallback_openai": openai_status
-        }
-
-
 async def ensure_dataset_indexed(dataset_id: str, db) -> str:
     """Check if the dataset has a ready vector index; if not, build it synchronously."""
     index = await db.rag_indexes.find_one({"dataset_id": dataset_id, "status": "ready"})
     if index:
         try:
-            from vector_db.store import VectorStore
-            store = VectorStore(backend=index.get("index_type", "chroma"), collection_name=str(index["_id"]))
-            if await store.count() > 0:
+            from services.chroma_service import collection_is_empty
+            is_empty = await collection_is_empty(str(index["_id"]))
+            if not is_empty:
                 return str(index["_id"])
-            logger.info(f"Index {index['_id']} is ready in DB but empty in vector store (possibly process restart with mock). Rebuilding...")
+            logger.info(f"Index {index['_id']} is ready in DB but empty in vector store. Rebuilding...")
         except Exception as e:
             logger.error(f"Error checking vector store count: {e}")
 
@@ -285,51 +151,13 @@ async def ensure_dataset_indexed(dataset_id: str, db) -> str:
     if not dataset:
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
 
-    # Check if there is an index doc already
-    index_doc = await db.rag_indexes.find_one({"dataset_id": dataset_id})
-    if index_doc:
-        index_id = str(index_doc["_id"])
-        await db.rag_indexes.update_one({"_id": index_id}, {"$set": {"status": "building", "error": None}})
-    else:
-        doc = {
-            "name": f"Dynamic Index - {dataset['name']}",
-            "dataset_id": dataset_id,
-            "embedding_model": "all-MiniLM-L6-v2",
-            "chunk_size": 512,
-            "chunk_overlap": 50,
-            "index_type": "chroma",
-            "chunk_count": 0,
-            "status": "building",
-            "user_id": dataset["user_id"],
-            "created_at": datetime.utcnow(),
-        }
-        result = await db.rag_indexes.insert_one(doc)
-        index_id = str(result.inserted_id)
-
-    # Build index synchronously to guarantee it is indexed when queried
-    from services.rag_service import _build_index
+    from services.dataset_service import build_index_for_dataset
     try:
-        await _build_index(index_id, {
-            "chunk_size": 512,
-            "chunk_overlap": 50,
-            "index_type": "chroma",
-            "embedding_model": "all-MiniLM-L6-v2",
-        }, db)
+        index_id = await build_index_for_dataset(dataset, db)
+        return index_id
     except Exception as e:
         logger.error(f"Failed to auto-index dataset {dataset_id}: {e}")
-        await db.rag_indexes.update_one({"_id": index_id}, {"$set": {"status": "error", "error": str(e)}})
         raise HTTPException(status_code=500, detail=f"Failed to index dataset: {str(e)}")
-
-    # Verify if the index built successfully
-    final_index = await db.rag_indexes.find_one({"_id": index_id})
-    if not final_index or final_index.get("status") != "ready":
-        err_msg = final_index.get("error") if final_index else "Unknown indexing error"
-        raise HTTPException(
-            status_code=500,
-            detail=f"Dataset indexing failed. Status: {final_index.get('status') if final_index else 'missing'}. Error: {err_msg}"
-        )
-
-    return index_id
 
 
 @router.post("/conversations/{conversation_id}/stream")
@@ -351,101 +179,27 @@ async def stream_message(
     }
     await db.messages.insert_one(user_msg)
 
-    # 2. Check and query selected context (dataset or vector index)
-    results = []
-    dataset_name = ""
-
-    if data.dataset_id:
-        try:
-            dataset = await db.datasets.find_one({"_id": data.dataset_id})
-            if dataset:
-                dataset_name = dataset.get("name", "selected file")
-            
-            # Ensure dataset is indexed synchronously
-            index_id = await ensure_dataset_indexed(data.dataset_id, db)
-            
-            from services.rag_service import query_vector_store
-            results = await query_vector_store(index_id, data.content, top_k=3, db=db)
-        except Exception as e:
-            logger.error(f"Error ensuring dataset is indexed or querying vector store: {e}")
-            # Local dynamic text search fallback as backup
-            try:
-                text_content = await read_dataset_context(data.dataset_id, db)
-                if text_content:
-                    chunks = [text_content[i:i+500] for i in range(0, len(text_content), 400)]
-                    query_words = [w.lower() for w in data.content.split() if len(w) > 3]
-                    matches = []
-                    for c in chunks:
-                        score = sum(1 for w in query_words if w in c.lower())
-                        if score > 0:
-                            matches.append((c, score))
-                    
-                    matches.sort(key=lambda x: x[1], reverse=True)
-                    
-                    from models import SearchResult
-                    results = [
-                        SearchResult(
-                            content=m[0].strip(),
-                            score=round(float(m[1] / max(1, len(query_words))), 2),
-                            source=dataset_name or "selected file",
-                            metadata={"source": dataset_name or "selected file"}
-                        )
-                        for m in matches[:3]
-                    ]
-            except Exception as fallback_err:
-                logger.error(f"Fallback text search also failed: {fallback_err}")
-    elif data.index_id:
-        try:
-            from services.rag_service import query_vector_store
-            results = await query_vector_store(data.index_id, data.content, top_k=3, db=db)
-        except Exception as e:
-            logger.error(f"Error querying vector store: {e}")
-
-    # Generate answer from context (ChromaDB similarity search matches)
-    from vector_db.store import get_embedding_model
-    embedder = get_embedding_model()
-    is_local_search = embedder.__class__.__name__ == "HashingTFIDFEmbedder"
-
     async def generate_response():
         try:
-            # Check if context was selected at all
+            # Check if context was selected
             if not data.dataset_id and not data.index_id:
                 answer_content = "Please select a dataset file from the 'Add Context' dropdown above to begin searching."
+                sources = []
             else:
-                best_match = None
-                if results:
-                    # Filter matches: if local hashing search is active, use a threshold of 0.20 for keyword matches
-                    threshold = 0.20 if is_local_search else 0.30
-                    matches = [r for r in results if r.score >= threshold]
-                    if matches:
-                        best_match = matches[0]
-
-                if best_match:
-                    # Return the exact information from the uploaded dataset
-                    answer_content = (
-                        f"{best_match.content}\n\n"
-                        f"---\n"
-                        f"**Source File Name:** {best_match.source}\n"
-                        f"**Matching Chunk:** {best_match.content}\n"
-                        f"**Similarity Score:** {best_match.score:.4f}"
-                    )
-                    if is_local_search:
-                        answer_content += (
-                            "\n\n"
-                            "> ℹ️ **Local Search Active:** Running in low-memory environment without an API key. "
-                            "Using local feature-hashing keyword matching. Configure `OPENAI_API_KEY` on Render "
-                            "for full semantic search."
-                        )
-                else:
-                    # Return: 'No relevant information found in the uploaded dataset.'
-                    answer_content = "No relevant information found in the uploaded dataset."
+                index_id = data.index_id
+                if data.dataset_id:
+                    # Enforce that the dataset is indexed
+                    index_id = await ensure_dataset_indexed(data.dataset_id, db)
+                
+                from services.chat_service import query_dataset_rag
+                rag_res = await query_dataset_rag(index_id, data.content, top_k=3, db=db)
+                answer_content = rag_res["answer"]
+                sources = rag_res.get("sources", [])
 
             # Stream response chunk by chunk for visual streaming effect
             words = answer_content.split(" ")
-            accumulated = ""
             for i, word in enumerate(words):
                 token = word + (" " if i < len(words) - 1 else "")
-                accumulated += token
                 yield f"data: {json.dumps({'token': token})}\n\n"
                 await asyncio.sleep(0.01)
 
@@ -503,3 +257,4 @@ async def stream_message(
 async def get_ollama_response(prompt: str, conv_id: str, db) -> str:
     """Non-streaming fallback message removing Ollama dependency"""
     return "Dataset-Only RAG is active. Please use the streaming endpoint with a dataset selected."
+

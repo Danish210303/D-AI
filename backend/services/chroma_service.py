@@ -42,3 +42,25 @@ async def run_with_retry_async(func, *args, **kwargs):
                     raise
             else:
                 raise
+
+async def collection_is_empty(collection_name: str) -> bool:
+    """Check if a ChromaDB collection is empty or does not exist."""
+    try:
+        client = ChromaManager.get_client()
+        if client is None:
+            return True
+            
+        def _check():
+            try:
+                col = client.get_collection(name=collection_name)
+                return col.count() == 0
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "does not exist" in err_msg or "not found" in err_msg:
+                    return True
+                raise
+                
+        return await run_with_retry_async(_check)
+    except Exception as e:
+        logger.error(f"Error checking if collection {collection_name} is empty: {e}")
+        return True

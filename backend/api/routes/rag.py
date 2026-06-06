@@ -47,11 +47,14 @@ async def create_index(
     index_id = str(result.inserted_id)
     doc["_id"] = index_id
 
-    background_tasks.add_task(_build_index, index_id, data.dict(), db)
+    # Fetch the dataset document to run index builder
+    dataset = await db.datasets.find_one({"_id": data.dataset_id})
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    from services.dataset_service import build_index_for_dataset
+    background_tasks.add_task(build_index_for_dataset, dataset, db)
     return fmt_index(doc)
-
-
-from services.rag_service import _build_index, query_vector_store
 
 
 @router.get("/indexes")
@@ -81,7 +84,9 @@ async def search(data: SearchRequest, current_user=Depends(get_current_user)):
     if index.get("status") != "ready":
         raise HTTPException(status_code=400, detail="Index not ready")
 
-    results = await query_vector_store(data.index_id, data.query, data.top_k, db)
+    from services.chat_service import query_dataset_rag
+    rag_res = await query_dataset_rag(data.index_id, data.query, data.top_k, db)
+    results = rag_res.get("sources", [])
     latency = round((time.time() - start) * 1000, 2)
 
     return SearchResponse(
@@ -99,96 +104,12 @@ async def rag_chat(data: RAGChatRequest, current_user=Depends(get_current_user))
     if not index:
         raise HTTPException(status_code=404, detail="Index not found")
 
-    # Get relevant chunks
-    results = await query_vector_store(data.index_id, data.question, data.top_k, db)
-
-    # Generate answer using context
-    context = "\n\n".join([r.content for r in results])
-    prompt = f"""Use the following pieces of context to answer the user question. If you do not know the answer, say you do not know.
-
-Context:
-{context}
-
-Question: {data.question}
-Answer:"""
-
-    from ollama import AsyncClient
-    from config import settings
-    try:
-        client = AsyncClient(host=settings.OLLAMA_BASE_URL, headers={"bypass-tunnel-reminder": "true"})
-        res = await client.generate(
-            model=data.model or "llama3",
-            prompt=prompt,
-            stream=False
-        )
-        answer = res.get("response", "")
-    except Exception as e:
-        logger.warning(f"Ollama RAG generate failed: {e}. Trying OpenAI fallback...")
-        if settings.OPENAI_API_KEY and not settings.OPENAI_API_KEY.startswith("sk-..."):
-            try:
-                from openai import AsyncOpenAI
-                openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-                res = await openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    stream=False
-                )
-                answer = res.choices[0].message.content or ""
-            except Exception as openai_err:
-                logger.error(f"OpenAI fallback failed for RAG: {openai_err}")
-                if results:
-                    fallback_msg = (
-                        "🤖 **Note: LLM server is currently offline.** Here is the direct matching content retrieved from your dataset:\n\n"
-                    )
-                    for idx, r in enumerate(results):
-                        fallback_msg += f"**Chunk {idx+1} (Source: `{r.source}`, Similarity Score: `{r.score}`)**:\n> {r.content}\n\n"
-                    answer = fallback_msg
-                else:
-                    answer = f"Connection Error: LLM server is offline, and no grounding context is available. Details: {str(openai_err)}"
-        else:
-            if results:
-                fallback_msg = (
-                    "🤖 **Note: LLM server is currently offline.** Here is the direct matching content retrieved from your dataset:\n\n"
-                )
-                for idx, r in enumerate(results):
-                    fallback_msg += f"**Chunk {idx+1} (Source: `{r.source}`, Similarity Score: `{r.score}`)**:\n> {r.content}\n\n"
-                answer = fallback_msg
-            else:
-                answer = f"Connection Error: Local Ollama is offline at {settings.OLLAMA_BASE_URL} and no OpenAI key is configured. Please start Ollama locally or configure a valid API key."
+    from services.chat_service import query_dataset_rag
+    rag_res = await query_dataset_rag(data.index_id, data.question, data.top_k, db)
 
     return {
-        "answer": answer,
-        "sources": results,
+        "answer": rag_res["answer"],
+        "sources": rag_res["sources"],
         "model": data.model,
-        "tokens_used": len(answer.split()) + len(context.split()),
+        "tokens_used": len(rag_res["answer"].split()),
     }
-
-
-def _simulate_search(query: str, top_k: int):
-    """Simulate vector search with mock results"""
-    from models import SearchResult
-    import random
-
-    templates = [
-        "This section discusses {topic} in detail, covering the main principles and applications.",
-        "According to the documentation, {topic} requires careful consideration of multiple factors.",
-        "The analysis shows that {topic} has significant implications for performance and scalability.",
-        "Research indicates that {topic} is best approached with a systematic methodology.",
-        "Key findings about {topic}: it demonstrates strong correlation with downstream outcomes.",
-    ]
-
-    results = []
-    words = query.split()[:3]
-    topic = " ".join(words) if words else "the requested information"
-
-    for i in range(min(top_k, 5)):
-        content = templates[i % len(templates)].format(topic=topic)
-        score = round(0.95 - (i * 0.06) + random.uniform(-0.02, 0.02), 3)
-        results.append(SearchResult(
-            content=content,
-            score=max(0.5, score),
-            source=f"document_page_{i + 1}.pdf",
-            metadata={"page": i + 1, "chunk": i},
-        ))
-
-    return results

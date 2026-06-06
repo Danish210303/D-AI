@@ -21,14 +21,15 @@ ALLOWED_EXTENSIONS = {
 
 
 def fmt_dataset(d: dict) -> dict:
+    status = d.get("status", "pending")
     return {
         "id": str(d["_id"]),
-        "name": d["name"],
-        "file_type": d["file_type"],
+        "name": d.get("name") or d.get("file_name", ""),
+        "file_type": d.get("file_type") or d.get("file_name", "").split(".")[-1].lower() if d.get("file_name") else "txt",
         "size_bytes": d.get("size_bytes", 0),
         "rows": d.get("rows"),
         "cols": d.get("cols"),
-        "status": d.get("status", "pending"),
+        "status": "ready" if status in ("ready", "indexed") else status,
         "user_id": d.get("user_id", ""),
         "created_at": d.get("created_at", datetime.utcnow()),
         "processed_at": d.get("processed_at"),
@@ -58,34 +59,27 @@ async def upload_dataset(
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"File type .{ext} not supported")
 
-    file_size = 0
-    file_id = str(uuid.uuid4())
-
     try:
-        from motor.motor_asyncio import AsyncIOMotorGridFSBucket
-        fs = AsyncIOMotorGridFSBucket(db._db)
-        grid_in = fs.open_upload_stream(file.filename)
+        file_bytes = await file.read()
+        file_size = len(file_bytes)
         
-        while chunk := await file.read(1024 * 1024):
-            file_size += len(chunk)
-            if file_size > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
-                await grid_in.abort()
-                raise HTTPException(status_code=413, detail="File too large")
-            await grid_in.write(chunk)
+        if file_size > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File too large")
             
-        await grid_in.close()
-        gridfs_id = str(grid_in._id)
+        from services.cloudinary_service import upload_file_to_cloudinary
+        cloudinary_res = await upload_file_to_cloudinary(file_bytes, file.filename)
+        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Upload to Cloudinary failed: {str(e)}")
 
     doc = {
+        "cloudinary_url": cloudinary_res["url"],
+        "public_id": cloudinary_res["public_id"],
+        "file_name": file.filename,
         "name": file.filename,
         "file_type": ext,
-        "file_path": f"./uploads/{file_id}.{ext}",
-        "file_id": file_id,
-        "gridfs_id": gridfs_id,
         "size_bytes": file_size,
         "status": "processing",
         "user_id": str(current_user["_id"]),
@@ -94,53 +88,21 @@ async def upload_dataset(
 
     result = await db.datasets.insert_one(doc)
     doc["_id"] = str(result.inserted_id)
+    doc["dataset_id"] = str(result.inserted_id)
+    
+    await db.datasets.update_one(
+        {"_id": result.inserted_id},
+        {"$set": {"dataset_id": str(result.inserted_id)}}
+    )
 
-    # Process in background
+    from services.dataset_service import build_index_for_dataset
     background_tasks.add_task(
-        _process_in_background,
-        str(result.inserted_id),
-        doc["file_path"],
-        ext,
+        build_index_for_dataset,
+        doc,
         db
     )
 
     return fmt_dataset(doc)
-
-
-async def _process_in_background(dataset_id: str, file_path: str, ext: str, db):
-    temp_path = None
-    try:
-        dataset = await db.datasets.find_one({"_id": dataset_id})
-        if not dataset:
-            raise Exception("Dataset not found in DB")
-            
-        from api.routes.chat import download_file_from_gridfs
-        temp_path = await download_file_from_gridfs(dataset)
-        
-        result = await process_dataset(temp_path, ext)
-        await db.datasets.update_one(
-            {"_id": dataset_id},
-            {"$set": {
-                "status": "ready",
-                "rows": result.get("rows"),
-                "cols": result.get("cols"),
-                "columns": result.get("columns", []),
-                "metadata": result.get("metadata", {}),
-                "processed_at": datetime.utcnow(),
-            }}
-        )
-    except Exception as e:
-        logger.error(f"Processing failed for {dataset_id}: {e}")
-        await db.datasets.update_one(
-            {"_id": dataset_id},
-            {"$set": {"status": "error", "error_message": str(e)}}
-        )
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except Exception as clean_err:
-                logger.error(f"Failed to delete temp file {temp_path}: {clean_err}")
 
 
 @router.get("/{dataset_id}")
@@ -159,24 +121,17 @@ async def delete_dataset(dataset_id: str, current_user=Depends(get_current_user)
     if not d:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    # Delete local file fallback if it exists
-    if os.path.exists(d.get("file_path", "")):
+    # Delete from Cloudinary
+    public_id = d.get("public_id")
+    if public_id:
         try:
-            os.remove(d["file_path"])
-        except Exception:
-            pass
-
-    # Delete from GridFS bucket
-    gridfs_id = d.get("gridfs_id")
-    if gridfs_id:
-        try:
-            from motor.motor_asyncio import AsyncIOMotorGridFSBucket
-            from bson import ObjectId
-            fs = AsyncIOMotorGridFSBucket(db._db)
-            await fs.delete(ObjectId(gridfs_id))
-            logger.info(f"Deleted GridFS file {gridfs_id} for dataset {dataset_id}")
+            import cloudinary.uploader
+            ext = d.get("file_type", "")
+            resource_type = "image" if ext in ("jpg", "jpeg", "png", "webp", "gif") else "raw"
+            cloudinary.uploader.destroy(public_id, resource_type=resource_type)
+            logger.info(f"Deleted Cloudinary file {public_id} for dataset {dataset_id}")
         except Exception as e:
-            logger.error(f"Failed to delete GridFS file {gridfs_id}: {e}")
+            logger.error(f"Failed to delete Cloudinary file {public_id}: {e}")
 
     await db.datasets.delete_one({"_id": dataset_id})
     return {"message": "Dataset deleted"}
@@ -195,8 +150,9 @@ async def reprocess_dataset(
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     await db.datasets.update_one({"_id": dataset_id}, {"$set": {"status": "processing"}})
+    from services.dataset_service import build_index_for_dataset
     background_tasks.add_task(
-        _process_in_background, dataset_id, d["file_path"], d["file_type"], db
+        build_index_for_dataset, d, db
     )
     return {"message": "Processing started"}
 
@@ -207,13 +163,13 @@ async def get_eda(dataset_id: str, current_user=Depends(get_current_user)):
     d = await db.datasets.find_one({"_id": dataset_id, "user_id": str(current_user["_id"])})
     if not d:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    if d.get("status") != "ready":
+    if d.get("status") not in ("ready", "indexed"):
         raise HTTPException(status_code=400, detail="Dataset not processed yet")
 
     temp_path = None
     try:
-        from api.routes.chat import download_file_from_gridfs
-        temp_path = await download_file_from_gridfs(d)
+        from services.dataset_service import download_file_from_cloudinary
+        temp_path = await download_file_from_cloudinary(d["cloudinary_url"])
         eda = await run_eda(temp_path, d.get("file_type", ""))
         return eda
     except Exception as e:
@@ -221,8 +177,7 @@ async def get_eda(dataset_id: str, current_user=Depends(get_current_user)):
     finally:
         if temp_path and os.path.exists(temp_path):
             try:
-                if d.get("gridfs_id") and str(d.get("gridfs_id")) in temp_path:
-                    os.remove(temp_path)
+                os.remove(temp_path)
             except Exception as clean_err:
                 logger.error(f"Failed to delete temp file {temp_path}: {clean_err}")
 
@@ -240,8 +195,8 @@ async def get_preview(
 
     temp_path = None
     try:
-        from api.routes.chat import download_file_from_gridfs
-        temp_path = await download_file_from_gridfs(d)
+        from services.dataset_service import download_file_from_cloudinary
+        temp_path = await download_file_from_cloudinary(d["cloudinary_url"])
         
         import pandas as pd
         ext = d["file_type"]

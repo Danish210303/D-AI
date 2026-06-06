@@ -30,8 +30,8 @@ async def lifespan(app: FastAPI):
     await connect_db()
     
     # RAG index startup recovery check
-    from services.startup import run_startup_checks
-    await run_startup_checks(app)
+    from services.startup_rebuild import run_startup_recovery
+    await run_startup_recovery()
 
     yield
     logger.info("Shutting down...")

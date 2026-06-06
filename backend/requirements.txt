@@ -43,4 +43,4 @@ slowapi==0.1.9
 openai==1.12.0
 email-validator
 ollama>=0.6.2
-
+cloudinary
