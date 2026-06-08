@@ -8,15 +8,68 @@ const api = axios.create({
   timeout: 60000,
 })
 
-// Request interceptor
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("access_token") || useAuthStore.getState().token
+function getjwtExpiry(token) {
+  if (!token) return 0
+  try {
+    const parts = token.split('.')
+    if (parts.length !== 3) return 0
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
+    return payload.exp ? payload.exp * 1000 : 0
+  } catch (e) {
+    return 0
+  }
+}
+
+let refreshPromise = null
+
+async function getOrRefreshAccessToken() {
+  let token = localStorage.getItem("access_token") || useAuthStore.getState().token
+  const refreshToken = localStorage.getItem("refresh_token") || useAuthStore.getState().refreshToken
+
   if (token) {
-    if (config.headers.set) {
-      config.headers.set('Authorization', `Bearer ${token}`)
-    } else {
-      config.headers['Authorization'] = `Bearer ${token}`
+    const expiry = getjwtExpiry(token)
+    const now = Date.now()
+    const isExpiredOrExpiringSoon = expiry && (expiry - now < 30000) // 30s buffer
+
+    if (isExpiredOrExpiringSoon && refreshToken) {
+      if (!refreshPromise) {
+        const { setAuth, logout } = useAuthStore.getState()
+        refreshPromise = axios.post(`${BASE_URL}/auth/refresh`, {
+          refresh_token: refreshToken,
+        }).then(res => {
+          const data = res.data
+          setAuth(data.user, data.access_token, data.refresh_token)
+          refreshPromise = null
+          return data.access_token
+        }).catch(err => {
+          refreshPromise = null
+          logout()
+          window.location.href = '/login'
+          return Promise.reject(err)
+        })
+      }
+      return refreshPromise
     }
+  }
+  return token
+}
+
+// Request interceptor
+api.interceptors.request.use(async (config) => {
+  if (config.url.includes('/auth/refresh') || config.url.includes('/auth/login') || config.url.includes('/auth/register')) {
+    return config
+  }
+  try {
+    const token = await getOrRefreshAccessToken()
+    if (token) {
+      if (config.headers.set) {
+        config.headers.set('Authorization', `Bearer ${token}`)
+      } else {
+        config.headers['Authorization'] = `Bearer ${token}`
+      }
+    }
+  } catch (e) {
+    return Promise.reject(e)
   }
   return config
 })
@@ -26,26 +79,35 @@ api.interceptors.response.use(
   (res) => res,
   async (err) => {
     const original = err.config
-    if (err.response?.status === 401 && !original._retry) {
+    if (err.response?.status === 401 && !original._retry && !original.url.includes('/auth/refresh')) {
       original._retry = true
       const refreshToken = localStorage.getItem("refresh_token") || useAuthStore.getState().refreshToken
       const { setAuth, logout } = useAuthStore.getState()
       if (refreshToken) {
-        try {
-          const { data } = await axios.post(`${BASE_URL}/auth/refresh`, {
+        if (!refreshPromise) {
+          refreshPromise = axios.post(`${BASE_URL}/auth/refresh`, {
             refresh_token: refreshToken,
+          }).then(res => {
+            const data = res.data
+            setAuth(data.user, data.access_token, data.refresh_token)
+            refreshPromise = null
+            return data.access_token
+          }).catch(refreshErr => {
+            refreshPromise = null
+            logout()
+            window.location.href = '/login'
+            return Promise.reject(refreshErr)
           })
-          setAuth(data.user, data.access_token, data.refresh_token)
-          
+        }
+        try {
+          const newToken = await refreshPromise
           if (original.headers.set) {
-            original.headers.set('Authorization', `Bearer ${data.access_token}`)
+            original.headers.set('Authorization', `Bearer ${newToken}`)
           } else {
-            original.headers['Authorization'] = `Bearer ${data.access_token}`
+            original.headers['Authorization'] = `Bearer ${newToken}`
           }
           return api(original)
         } catch (refreshErr) {
-          logout()
-          window.location.href = '/login'
           return Promise.reject(refreshErr)
         }
       } else {
@@ -76,7 +138,6 @@ export const chatAPI = {
   getMessages: (id) => api.get(`/chat/conversations/${id}/messages`),
   sendMessage: (id, data) => api.post(`/chat/conversations/${id}/messages`, data),
   streamMessage: (id, data, onChunk, onDone) => {
-    const token = localStorage.getItem("access_token") || useAuthStore.getState().token
     const refreshToken = localStorage.getItem("refresh_token") || useAuthStore.getState().refreshToken
     const { setAuth, logout } = useAuthStore.getState()
     
@@ -128,31 +189,43 @@ export const chatAPI = {
       }
     }
 
-    return executeFetch(token).then(async (res) => {
-      if (res.status === 401 && refreshToken) {
-        try {
-          const refreshRes = await axios.post(`${BASE_URL}/auth/refresh`, {
-            refresh_token: refreshToken,
-          })
-          const newData = refreshRes.data
-          setAuth(newData.user, newData.access_token, newData.refresh_token)
-          const retriedRes = await executeFetch(newData.access_token)
-          if (!retriedRes.ok) {
-            throw new Error(`Streaming failed: HTTP ${retriedRes.status}`)
+    return getOrRefreshAccessToken().then((accessToken) => {
+      return executeFetch(accessToken).then(async (res) => {
+        if (res.status === 401 && refreshToken) {
+          try {
+            if (!refreshPromise) {
+              refreshPromise = axios.post(`${BASE_URL}/auth/refresh`, {
+                refresh_token: refreshToken,
+              }).then(refreshRes => {
+                const newData = refreshRes.data
+                setAuth(newData.user, newData.access_token, newData.refresh_token)
+                refreshPromise = null
+                return newData.access_token
+              }).catch(refreshErr => {
+                refreshPromise = null
+                logout()
+                throw new Error('Authentication expired. Please log in again.')
+              })
+            }
+            const newAccessToken = await refreshPromise
+            const retriedRes = await executeFetch(newAccessToken)
+            if (!retriedRes.ok) {
+              throw new Error(`Streaming failed: HTTP ${retriedRes.status}`)
+            }
+            return handleStream(retriedRes)
+          } catch (refreshErr) {
+            logout()
+            throw new Error('Authentication expired. Please log in again.')
           }
-          return handleStream(retriedRes)
-        } catch (refreshErr) {
-          logout()
-          throw new Error('Authentication expired. Please log in again.')
         }
-      }
 
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '')
-        throw new Error(errText || `Request failed with status ${res.status}`)
-      }
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '')
+          throw new Error(errText || `Request failed with status ${res.status}`)
+        }
 
-      return handleStream(res)
+        return handleStream(res)
+      })
     })
   },
 }

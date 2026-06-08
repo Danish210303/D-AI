@@ -70,6 +70,56 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
 
+    @field_validator("SECRET_KEY", mode="before")
+    @classmethod
+    def parse_secret_key(cls, v):
+        if not v or v == "dev-secret-key-change-in-production":
+            persist_dir = os.environ.get("CHROMA_PERSIST_DIR", "./chroma_db")
+            os.makedirs(persist_dir, exist_ok=True)
+            key_path = os.path.join(persist_dir, "secret.key")
+            if os.path.exists(key_path):
+                try:
+                    with open(key_path, "r") as f:
+                        saved_key = f.read().strip()
+                        if saved_key:
+                            return saved_key
+                except Exception:
+                    pass
+            import secrets
+            new_key = secrets.token_hex(32)
+            try:
+                with open(key_path, "w") as f:
+                    f.write(new_key)
+            except Exception:
+                pass
+            return new_key
+        return v
+
+    @field_validator("JWT_REFRESH_SECRET", mode="before")
+    @classmethod
+    def parse_refresh_secret(cls, v):
+        if not v or v == "dev-refresh-secret-key-change-in-production":
+            persist_dir = os.environ.get("CHROMA_PERSIST_DIR", "./chroma_db")
+            os.makedirs(persist_dir, exist_ok=True)
+            key_path = os.path.join(persist_dir, "refresh_secret.key")
+            if os.path.exists(key_path):
+                try:
+                    with open(key_path, "r") as f:
+                        saved_key = f.read().strip()
+                        if saved_key:
+                            return saved_key
+                except Exception:
+                    pass
+            import secrets
+            new_key = secrets.token_hex(32)
+            try:
+                with open(key_path, "w") as f:
+                    f.write(new_key)
+            except Exception:
+                pass
+            return new_key
+        return v
+
     @field_validator("DEBUG", mode="before")
     @classmethod
     def parse_debug(cls, v):
@@ -81,6 +131,7 @@ class Settings(BaseSettings):
                 return False
             return False
         return bool(v)
+
 
     @field_validator(
         "ACCESS_TOKEN_EXPIRE_MINUTES",

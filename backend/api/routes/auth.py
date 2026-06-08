@@ -90,10 +90,7 @@ async def login(data: UserLogin):
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(data: RefreshTokenRequest):
     db = get_db()
-    payload = decode_token(data.refresh_token)
-
-    if payload.get("type") != "refresh":
-        raise HTTPException(status_code=401, detail="Invalid token type")
+    payload = decode_token(data.refresh_token, expected_type="refresh")
 
     user_id = payload.get("sub")
     user = await db.users.find_one({"_id": user_id})

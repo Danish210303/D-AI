@@ -46,25 +46,34 @@ def create_refresh_token(data: Dict[str, Any]) -> str:
     return jwt.encode(to_encode, secret, algorithm=settings.ALGORITHM)
 
 
-def decode_token(token: str) -> Dict[str, Any]:
+def decode_token(token: str, expected_type: str = "access") -> Dict[str, Any]:
     try:
-        # Try primary secret key first (access tokens)
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        return payload
-    except JWTError as e:
-        logger.warning(f"JWT access token decode failed: {e}")
-        try:
-            # Fallback to refresh token secret key (refresh tokens)
-            secret = settings.JWT_REFRESH_SECRET or settings.SECRET_KEY
-            payload = jwt.decode(token, secret, algorithms=[settings.ALGORITHM])
-            return payload
-        except JWTError as re:
-            logger.error(f"JWT validation failure: Both access and refresh tokens failed decoding. Details: {re}")
+        secret = settings.SECRET_KEY if expected_type == "access" else (settings.JWT_REFRESH_SECRET or settings.SECRET_KEY)
+        payload = jwt.decode(token, secret, algorithms=[settings.ALGORITHM])
+        
+        token_type = payload.get("type")
+        if token_type != expected_type:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid or expired token: {str(re)}",
+                detail=f"Invalid token type: expected {expected_type}, got {token_type}",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        return payload
+    except jwt.ExpiredSignatureError as e:
+        logger.warning(f"JWT {expected_type} token expired: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except JWTError as e:
+        logger.error(f"JWT {expected_type} token validation failure: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
 
 
 async def get_current_user(

@@ -108,15 +108,7 @@ class AuthMiddleware:
 
         token = auth_header.split(" ")[1]
         try:
-            payload = decode_token(token)
-            if payload.get("type") != "access":
-                response = JSONResponse(
-                    status_code=401,
-                    content={"detail": "Invalid token type"}
-                )
-                await response(scope, receive, send)
-                return
-                
+            payload = decode_token(token, expected_type="access")
             user_id = payload.get("sub")
             if not user_id:
                 response = JSONResponse(
