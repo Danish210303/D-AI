@@ -120,8 +120,23 @@ async def refresh_token(data: RefreshTokenRequest):
     payload = decode_token(data.refresh_token, expected_type="refresh")
 
     user_id = payload.get("sub")
-    user = await db.users.find_one({"_id": user_id})
+    logger.info(f"Token refresh requested for user_id (sub): {user_id}")
+
+    # Support both string and ObjectId _id formats (MongoDB stores _id as ObjectId)
+    from bson import ObjectId
+    from bson.errors import InvalidId
+    if user_id and len(user_id) == 24:
+        try:
+            user_oid = ObjectId(user_id)
+            user_query = {"_id": {"$in": [user_id, user_oid]}}
+        except (InvalidId, TypeError, ValueError):
+            user_query = {"_id": user_id}
+    else:
+        user_query = {"_id": user_id}
+
+    user = await db.users.find_one(user_query)
     if not user:
+        logger.warning(f"Token refresh failed: user not found for sub: {user_id} (query: {user_query})")
         raise HTTPException(status_code=401, detail="User not found")
 
     token_data = {"sub": str(user["_id"]), "email": user["email"]}

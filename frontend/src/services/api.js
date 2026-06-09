@@ -101,17 +101,23 @@ api.interceptors.response.use(
       const { setAuth, logout } = useAuthStore.getState()
       if (refreshToken) {
         if (!refreshPromise) {
+          console.log('[API Auth] Access token rejected (401). Attempting refresh...');
           refreshPromise = axios.post(`${BASE_URL}/auth/refresh`, {
             refresh_token: refreshToken,
           }).then(res => {
             const data = res.data
+            console.log('[API Auth] Token refresh successful.');
             setAuth(data.user, data.access_token, data.refresh_token)
             refreshPromise = null
             return data.access_token
           }).catch(refreshErr => {
+            console.error('[API Auth] Token refresh failed. Logging out.', refreshErr.response?.data || refreshErr.message);
             refreshPromise = null
             logout()
-            window.location.href = '/login'
+            // Use replace to prevent back-button loops to broken auth state
+            if (window.location.pathname !== '/login') {
+              window.location.replace('/login')
+            }
             return Promise.reject(refreshErr)
           })
         }
@@ -127,8 +133,11 @@ api.interceptors.response.use(
           return Promise.reject(refreshErr)
         }
       } else {
+        console.warn('[API Auth] No refresh token available. Logging out.');
         logout()
-        window.location.href = '/login'
+        if (window.location.pathname !== '/login') {
+          window.location.replace('/login')
+        }
         return Promise.reject(err)
       }
     }
