@@ -50,7 +50,7 @@ export default function TrainingPage() {
     try {
       const { data } = await datasetAPI.list()
       // Only show datasets that are successfully processed and ready
-      const readyDatasets = data.filter(d => d.status === 'ready')
+      const readyDatasets = data.filter(d => d.status === 'ready' || d.status === 'completed')
       setDatasets(readyDatasets)
       if (readyDatasets.length > 0) {
         setConfig(prev => ({ ...prev, dataset: readyDatasets[0].id }))

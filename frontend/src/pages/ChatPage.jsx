@@ -51,7 +51,7 @@ export default function ChatPage() {
       setIndexes(data.filter(idx => idx.status === 'ready'))
     }).catch(() => {})
     datasetAPI.list().then(({ data }) => {
-      setDatasets(data.filter(ds => ds.status === 'ready'))
+      setDatasets(data.filter(ds => ds.status === 'ready' || ds.status === 'completed'))
     }).catch(() => {})
   }, [])
 

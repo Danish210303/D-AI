@@ -66,7 +66,7 @@ export default function RAGPage() {
       setLoadingDatasets(true)
       const { data } = await datasetAPI.list()
       // Only keep ready tabular/text files for indexing
-      setDatasets(data.filter(d => d.status === 'ready'))
+      setDatasets(data.filter(d => d.status === 'ready' || d.status === 'completed'))
     } catch (err) {
       toast.error('Failed to load datasets')
     } finally {
