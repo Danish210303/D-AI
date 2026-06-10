@@ -168,7 +168,11 @@ Generate a natural language response."""
 
     # A: Try Ollama first
     try:
-        client = AsyncClient(host=settings.OLLAMA_BASE_URL, headers={"bypass-tunnel-reminder": "true"})
+        client = AsyncClient(
+            host=settings.OLLAMA_BASE_URL,
+            headers={"bypass-tunnel-reminder": "true"},
+            timeout=3.0
+        )
         res = await client.generate(
             model=settings.DEFAULT_MODEL or "llama3",
             prompt=prompt,
