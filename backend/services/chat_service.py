@@ -15,9 +15,16 @@ def generate_fallback_answer(question: str, valid_sources: list) -> str:
     """
     import re
     
-    # 1. Extract query words/keywords
-    stopwords = {"who", "what", "where", "when", "why", "how", "is", "are", "was", "were", "the", "a", "an", "and", "or", "to", "in", "of", "for", "on", "with", "at", "by"}
-    q_words = re.findall(r'\b\w{3,}\b', question.lower())
+    # 1. Extract query words/keywords (supporting words >= 2 chars)
+    stopwords = {
+        "who", "what", "where", "when", "why", "how", "is", "are", "was", "were", 
+        "the", "a", "an", "and", "or", "to", "in", "of", "for", "on", "with", "at", "by",
+        "i", "me", "my", "we", "our", "you", "your", "he", "him", "his", "she", "her", 
+        "it", "its", "they", "them", "their", "am", "be", "been", "do", "did", "does",
+        "go", "goes", "went", "has", "have", "had", "will", "would", "shall", "should",
+        "can", "could", "may", "might", "must", "us", "so", "as", "if", "but"
+    }
+    q_words = re.findall(r'\b\w{2,}\b', question.lower())
     keywords = {w for w in q_words if w not in stopwords}
     
     # 2. Extract sentences from source text chunks
@@ -31,12 +38,15 @@ def generate_fallback_answer(question: str, valid_sources: list) -> str:
                 
     best_sentences = []
     for sentence, source in sentences:
-        s_words = re.findall(r'\b\w{3,}\b', sentence.lower())
+        s_words = re.findall(r'\b\w{2,}\b', sentence.lower())
         overlap = len(keywords.intersection(s_words))
         if overlap > 0:
             best_sentences.append((sentence, overlap, source))
             
     if not best_sentences:
+        # Default fallback: return the top sentence from the most relevant source
+        if sentences:
+            return f"According to the dataset, {sentences[0][0]}"
         return "No relevant information found in the dataset"
         
     best_sentences.sort(key=lambda x: x[1], reverse=True)
@@ -120,8 +130,8 @@ async def query_dataset_rag(index_id: str, question: str, top_k: int = 5, db = N
     logger.info(f"Retrieved chunks count: {len(sources)}")
     logger.info(f"Similarity scores: {[s['score'] for s in sources]}")
 
-    # Filter with similarity score threshold: 0.20 for TF-IDF keyword matching, 0.30 for semantic
-    threshold = 0.20 if is_local_search else 0.30
+    # Filter with similarity score threshold: 0.0 for TF-IDF keyword matching (fallback responder filters via exact text overlap), 0.30 for semantic
+    threshold = 0.0 if is_local_search else 0.30
     valid_sources = [s for s in sources if s["score"] >= threshold]
 
     logger.info(f"Valid chunks count (above threshold {threshold}): {len(valid_sources)}")
