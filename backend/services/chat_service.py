@@ -7,6 +7,12 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+import time
+
+# Cache Ollama connection status to prevent connection request hangs when offline
+_ollama_online = True
+_last_ollama_check = 0.0
+
 def generate_fallback_answer(question: str, valid_sources: list) -> str:
     """
     Generate a natural language fallback response by extracting sentences
@@ -44,9 +50,6 @@ def generate_fallback_answer(question: str, valid_sources: list) -> str:
             best_sentences.append((sentence, overlap, source))
             
     if not best_sentences:
-        # Default fallback: return the top sentence from the most relevant source
-        if sentences:
-            return f"According to the dataset, {sentences[0][0]}"
         return "No relevant information found in the dataset"
         
     best_sentences.sort(key=lambda x: x[1], reverse=True)
@@ -61,6 +64,19 @@ async def query_dataset_rag(index_id: str, question: str, top_k: int = 5, db = N
     Retrieve matching context chunks from vector DB (Chroma/FAISS) and answer the user question.
     Falls back to a smart local context matcher if Ollama/OpenAI is offline.
     """
+    # Detect simple greetings/chitchat/thanks to avoid returning forced database answers
+    clean_question = question.strip().lower().rstrip("?.!")
+    greetings = {"hi", "hello", "hey", "greetings", "good morning", "good afternoon", "howdy", "hola", "yo"}
+    if clean_question in greetings:
+        return {"answer": "Hello! How can I help you today?", "sources": []}
+        
+    how_are_you = {"how are you", "how is it going", "how's it going", "how are you doing", "how do you do"}
+    if clean_question in how_are_you:
+        return {"answer": "I'm doing great, thank you! How can I help you analyze your dataset today?", "sources": []}
+
+    thanks = {"thanks", "thank you", "thank you so much", "ty", "cheers"}
+    if clean_question in thanks:
+        return {"answer": "You're very welcome! Let me know if you have any other questions.", "sources": []}
     # 1. Fetch index and dataset documents from DB
     index = await db.rag_indexes.find_one({"_id": index_id})
     if not index:
@@ -167,24 +183,36 @@ Generate a natural language response."""
     llm_connected = False
 
     # A: Try Ollama first
-    try:
-        client = AsyncClient(
-            host=settings.OLLAMA_BASE_URL,
-            headers={"bypass-tunnel-reminder": "true"},
-            timeout=3.0
-        )
-        res = await client.generate(
-            model=settings.DEFAULT_MODEL or "llama3",
-            prompt=prompt,
-            stream=False
-        )
-        answer_text = res.get("response", "").strip()
-        if answer_text:
-            llm_connected = True
-            logger.info("LLM response status: Success (Ollama)")
-            logger.info("✓ LLM response received")
-    except Exception as ollama_err:
-        logger.warning(f"Ollama RAG generate failed: {ollama_err}. Trying OpenAI fallback...")
+    global _ollama_online, _last_ollama_check
+    current_time = time.time()
+    if not _ollama_online and (current_time - _last_ollama_check > 300):
+        # Retry connection status check every 5 minutes
+        _ollama_online = True
+        logger.info("Retrying Ollama connection check...")
+
+    if _ollama_online:
+        try:
+            client = AsyncClient(
+                host=settings.OLLAMA_BASE_URL,
+                headers={"bypass-tunnel-reminder": "true"},
+                timeout=1.5  # Fast 1.5 seconds connection timeout
+            )
+            res = await client.generate(
+                model=settings.DEFAULT_MODEL or "llama3",
+                prompt=prompt,
+                stream=False
+            )
+            answer_text = res.get("response", "").strip()
+            if answer_text:
+                llm_connected = True
+                logger.info("LLM response status: Success (Ollama)")
+                logger.info("✓ LLM response received")
+        except Exception as ollama_err:
+            _ollama_online = False
+            _last_ollama_check = current_time
+            logger.warning(f"Ollama connection failed (offline): {ollama_err}. Bypassing for subsequent requests. Trying fallback...")
+    else:
+        logger.info("Ollama is cached offline. Skipping connection attempt and trying fallbacks immediately.")
         
     # B: Try OpenAI fallback if Ollama is unavailable
     if not llm_connected:
