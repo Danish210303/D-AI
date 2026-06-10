@@ -26,9 +26,15 @@ def sanitize_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
 
 class DummyEmbeddingFunction:
     """A dummy embedding function to prevent ChromaDB from initializing its heavy default ONNX model."""
-    def __call__(self, texts: List[str]) -> List[List[float]]:
+    def __call__(self, input: List[str]) -> List[List[float]]:
         # We compute embeddings ourselves and pass them explicitly, so this is never called
-        return [[0.0] * 384 for _ in texts]
+        return [[0.0] * 384 for _ in input]
+
+    @staticmethod
+    def name() -> str:
+        return "dummy"
+
+
 
 
 class VectorStore:

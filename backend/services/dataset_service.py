@@ -173,12 +173,14 @@ async def build_index_for_dataset(dataset_doc: dict, db) -> str:
         
         # 3. Process the file metadata for the dataset document compatibility
         meta_res = await asyncio.to_thread(_process_sync, temp_path, file_type)
+        logger.info("Dataset loaded")
         
         # 4. Extract text
         chunks = await extract_text_from_file(temp_path, file_type)
         
         if not chunks:
             raise Exception("No text content could be extracted from this dataset.")
+        logger.info("Chunks created")
             
         # 5. Generate embeddings & Store in VectorStore
         embedder = await get_embedding_model_async("paraphrase-MiniLM-L3-v2")
@@ -194,6 +196,7 @@ async def build_index_for_dataset(dataset_doc: dict, db) -> str:
             if hasattr(batch_embeds, "tolist"):
                 batch_embeds = batch_embeds.tolist()
             embeddings.extend(batch_embeds)
+        logger.info("Embeddings generated")
             
         store = VectorStore(backend=index_type, collection_name=index_id)
         metadatas = []
@@ -207,6 +210,11 @@ async def build_index_for_dataset(dataset_doc: dict, db) -> str:
         ids = [f"{index_id}_{idx}" for idx in range(len(chunks))]
         
         await store.add_documents(chunks, embeddings, metadatas, ids)
+        logger.info("Vectors inserted")
+        
+        # Log collection count
+        col_count = await store.count()
+        logger.info(f"Collection count: {col_count}")
         
         # 6. Update status to indexed in DB
         await db.datasets.update_one(
@@ -225,10 +233,11 @@ async def build_index_for_dataset(dataset_doc: dict, db) -> str:
             {"_id": index_doc["_id"] if index_doc else res.inserted_id},
             {"$set": {"status": "ready", "chunk_count": len(chunks), "error": None}}
         )
+        logger.info("Index marked ready")
         logger.info(f"Successfully indexed dataset {dataset_id} with {len(chunks)} chunks using {index_type}.")
         return index_id
     except Exception as e:
-        logger.error(f"Failed to build index for dataset {dataset_id}: {e}", exc_info=True)
+        logger.exception(f"Indexing failed: {e}")
         await db.datasets.update_one(
             {"_id": dataset_doc["_id"]},
             {"$set": {"status": "failed", "error_message": str(e)}}

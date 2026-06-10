@@ -49,8 +49,14 @@ async def run_with_retry_async(func, *args, **kwargs):
 
 class DummyEmbeddingFunction:
     """A dummy embedding function to prevent ChromaDB from initializing its heavy default ONNX model."""
-    def __call__(self, texts):
-        return [[0.0] * 384 for _ in texts]
+    def __call__(self, input):
+        return [[0.0] * 384 for _ in input]
+
+    @staticmethod
+    def name() -> str:
+        return "dummy"
+
+
 
 async def collection_is_empty(collection_name: str) -> bool:
     """Check if a ChromaDB collection is empty or does not exist."""
