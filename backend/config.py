@@ -5,7 +5,7 @@ os.environ["ORT_LOGGING_LEVEL"] = "3"
 os.environ["ONNXRUNTIME_PROVIDERS"] = '["CPUExecutionProvider"]'
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, AliasChoices, field_validator
+from pydantic import Field, AliasChoices, field_validator, model_validator
 from typing import List, Optional
 from dotenv import load_dotenv
 
@@ -184,6 +184,15 @@ class Settings(BaseSettings):
         if not self.ALLOWED_ORIGINS:
             return ["*"]
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def set_redis_defaults(self) -> 'Settings':
+        if self.REDIS_URL != "redis://localhost:6379/0":
+            if not self.CELERY_BROKER_URL or self.CELERY_BROKER_URL == "redis://localhost:6379/0":
+                self.CELERY_BROKER_URL = self.REDIS_URL
+            if not self.CELERY_RESULT_BACKEND or self.CELERY_RESULT_BACKEND == "redis://localhost:6379/0":
+                self.CELERY_RESULT_BACKEND = self.REDIS_URL
+        return self
 
 
 settings = Settings()
