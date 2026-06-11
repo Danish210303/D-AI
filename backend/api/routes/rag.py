@@ -5,7 +5,7 @@ import logging
 import asyncio
 
 from models import IndexCreate, IndexResponse, SearchRequest, SearchResponse, RAGChatRequest
-from auth.utils import get_current_user, verify_key_permissions
+from auth.utils import get_current_user, verify_key_permissions, get_id_query
 from database import get_db
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
@@ -52,7 +52,7 @@ async def create_index(
     doc["_id"] = index_id
 
     # Fetch the dataset document to run index builder
-    dataset = await db.datasets.find_one({"_id": data.dataset_id})
+    dataset = await db.datasets.find_one({"_id": get_id_query(data.dataset_id)})
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
@@ -96,7 +96,7 @@ async def list_indexes(current_user=Depends(get_current_user)):
 @router.delete("/indexes/{index_id}")
 async def delete_index(index_id: str, current_user=Depends(get_current_user)):
     db = get_db()
-    await db.rag_indexes.delete_one({"_id": index_id, "user_id": str(current_user["_id"])})
+    await db.rag_indexes.delete_one({"_id": get_id_query(index_id), "user_id": str(current_user["_id"])})
     return {"message": "Index deleted"}
 
 
@@ -105,7 +105,7 @@ async def search(data: SearchRequest, request: Request, current_user=Depends(get
     db = get_db()
     start = time.time()
 
-    index = await db.rag_indexes.find_one({"_id": data.index_id})
+    index = await db.rag_indexes.find_one({"_id": get_id_query(data.index_id)})
     if not index:
         raise HTTPException(status_code=404, detail="Index not found")
     if index.get("status") != "ready":
@@ -130,7 +130,7 @@ async def search(data: SearchRequest, request: Request, current_user=Depends(get
 @router.post("/chat")
 async def rag_chat(data: RAGChatRequest, request: Request, current_user=Depends(get_current_user)):
     db = get_db()
-    index = await db.rag_indexes.find_one({"_id": data.index_id})
+    index = await db.rag_indexes.find_one({"_id": get_id_query(data.index_id)})
     if not index:
         raise HTTPException(status_code=404, detail="Index not found")
 

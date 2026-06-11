@@ -4,7 +4,7 @@ from typing import List
 import logging
 
 from models import TrainingConfig, TrainingJobResponse, ModelResponse, PredictRequest, PredictResponse
-from auth.utils import get_current_user, verify_key_permissions
+from auth.utils import get_current_user, verify_key_permissions, get_id_query
 from database import get_db
 from training.trainer import start_training_job
 
@@ -167,7 +167,7 @@ async def get_training_logs(job_id: str, current_user=Depends(get_current_user))
 @router.get("/{model_id}")
 async def get_model(model_id: str, current_user=Depends(get_current_user)):
     db = get_db()
-    m = await db.models.find_one({"_id": model_id, "user_id": str(current_user["_id"])})
+    m = await db.models.find_one({"_id": get_id_query(model_id), "user_id": str(current_user["_id"])})
     if not m:
         raise HTTPException(status_code=404, detail="Model not found")
     return fmt_model(m)
@@ -176,10 +176,10 @@ async def get_model(model_id: str, current_user=Depends(get_current_user)):
 @router.delete("/{model_id}")
 async def delete_model(model_id: str, current_user=Depends(get_current_user)):
     db = get_db()
-    m = await db.models.find_one({"_id": model_id, "user_id": str(current_user["_id"])})
+    m = await db.models.find_one({"_id": get_id_query(model_id), "user_id": str(current_user["_id"])})
     if not m:
         raise HTTPException(status_code=404, detail="Model not found")
-    await db.models.delete_one({"_id": model_id})
+    await db.models.delete_one({"_id": get_id_query(model_id)})
     return {"message": "Model deleted"}
 
 
@@ -193,7 +193,7 @@ async def predict(model_id: str, predict_request: PredictRequest, http_request: 
     
     start = time.time()
     db = get_db()
-    m = await db.models.find_one({"_id": model_id})
+    m = await db.models.find_one({"_id": get_id_query(model_id)})
     if not m:
         raise HTTPException(status_code=404, detail="Model not found")
     if m.get("status") != "ready":
@@ -276,7 +276,7 @@ async def predict(model_id: str, predict_request: PredictRequest, http_request: 
 @router.post("/{model_id}/evaluate")
 async def evaluate_model(model_id: str, current_user=Depends(get_current_user)):
     db = get_db()
-    m = await db.models.find_one({"_id": model_id, "user_id": str(current_user["_id"])})
+    m = await db.models.find_one({"_id": get_id_query(model_id), "user_id": str(current_user["_id"])})
     if not m:
         raise HTTPException(status_code=404, detail="Model not found")
     return {

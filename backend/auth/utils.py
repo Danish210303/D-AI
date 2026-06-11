@@ -98,6 +98,18 @@ def validate_object_id(id_str: str) -> ObjectId:
         )
 
 
+def get_id_query(id_str: str) -> dict | str:
+    """Return a query dictionary checking for both string and ObjectId representation of _id."""
+    if not id_str:
+        return id_str
+    if len(id_str) == 24:
+        try:
+            return {"$in": [id_str, ObjectId(id_str)]}
+        except Exception:
+            return id_str
+    return id_str
+
+
 async def get_current_user(
     request: Request,
 ):

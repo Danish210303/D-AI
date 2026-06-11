@@ -361,7 +361,8 @@ async def public_predict(request: Request):
         raise HTTPException(status_code=400, detail="model_id and input are required")
         
     db = get_db()
-    m = await db.models.find_one({"_id": model_id})
+    from auth.utils import get_id_query
+    m = await db.models.find_one({"_id": get_id_query(model_id)})
     if not m:
         raise HTTPException(status_code=404, detail="Model not found")
         
@@ -436,7 +437,8 @@ async def public_chat(request: Request):
         raise HTTPException(status_code=400, detail="index_id and message/question are required")
         
     db = get_db()
-    index = await db.rag_indexes.find_one({"_id": index_id})
+    from auth.utils import get_id_query
+    index = await db.rag_indexes.find_one({"_id": get_id_query(index_id)})
     if not index:
         raise HTTPException(status_code=404, detail="Index not found")
         
