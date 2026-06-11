@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from datetime import datetime
 import time
 import logging
 import asyncio
 
 from models import IndexCreate, IndexResponse, SearchRequest, SearchResponse, RAGChatRequest
-from auth.utils import get_current_user
+from auth.utils import get_current_user, verify_key_permissions
 from database import get_db
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
@@ -101,7 +101,7 @@ async def delete_index(index_id: str, current_user=Depends(get_current_user)):
 
 
 @router.post("/search")
-async def search(data: SearchRequest, current_user=Depends(get_current_user)):
+async def search(data: SearchRequest, request: Request, current_user=Depends(get_current_user)):
     db = get_db()
     start = time.time()
 
@@ -110,6 +110,9 @@ async def search(data: SearchRequest, current_user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Index not found")
     if index.get("status") != "ready":
         raise HTTPException(status_code=400, detail="Index not ready")
+
+    # Enforce key bounds
+    await verify_key_permissions(request, required_scopes=["chat"], dataset_id=index.get("dataset_id"))
 
     from services.chat_service import query_dataset_rag
     rag_res = await query_dataset_rag(data.index_id, data.query, data.top_k, db)
@@ -125,11 +128,14 @@ async def search(data: SearchRequest, current_user=Depends(get_current_user)):
 
 
 @router.post("/chat")
-async def rag_chat(data: RAGChatRequest, current_user=Depends(get_current_user)):
+async def rag_chat(data: RAGChatRequest, request: Request, current_user=Depends(get_current_user)):
     db = get_db()
     index = await db.rag_indexes.find_one({"_id": data.index_id})
     if not index:
         raise HTTPException(status_code=404, detail="Index not found")
+
+    # Enforce key bounds
+    await verify_key_permissions(request, required_scopes=["chat"], dataset_id=index.get("dataset_id"))
 
     from services.chat_service import query_dataset_rag
     rag_res = await query_dataset_rag(data.index_id, data.question, data.top_k, db, model=data.model)

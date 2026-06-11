@@ -263,9 +263,11 @@ class AuthMiddleware:
                 await response(scope, receive, send)
                 return
 
-            # Attach user to request state
+            # Attach user and api_key to request state
             scope["state"] = scope.get("state", {})
             scope["state"]["user"] = user
+            if token.startswith("sk-"):
+                scope["state"]["api_key"] = key_doc
             logger.info(f"AuthMiddleware: Successfully authenticated user: {user.get('email')} (ID: {user_id})")
 
         except HTTPException as he:

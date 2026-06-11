@@ -286,6 +286,8 @@ class ApiKeyCreate(BaseModel):
     scopes: List[str] = ["chat"]
     rate_limit: int = 1000
     expires_in_days: Optional[int] = None
+    dataset_ids: Optional[List[str]] = None
+    model_ids: Optional[List[str]] = None
 
 
 class ApiKeyResponse(BaseModel):
@@ -303,6 +305,8 @@ class ApiKeyResponse(BaseModel):
     expires_at: Optional[datetime] = None
     is_active: bool = True
     last_used: Optional[datetime] = None
+    dataset_ids: Optional[List[str]] = None
+    model_ids: Optional[List[str]] = None
 
 
 class ApiKeyUpdate(BaseModel):

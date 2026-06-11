@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 def generate_api_key() -> tuple[str, str, str]:
     """Returns (full_key, prefix, hash)"""
-    # Generate key using secrets.token_urlsafe(32) prefixed with sk- for public endpoint routing
-    key = f"sk-{secrets.token_urlsafe(32)}"
-    prefix = key[:8]
+    # Generate key using secrets.token_urlsafe(32) prefixed with sk-ai_ for public endpoint routing
+    key = f"sk-ai_{secrets.token_urlsafe(32)}"
+    prefix = key[:11]  # Prefix displays as sk-ai_xxxxx
     key_hash = hashlib.sha256(key.encode()).hexdigest()
     return key, prefix, key_hash
 
@@ -64,6 +64,8 @@ def fmt_key(k: dict, show_key: bool = False, raw_key: str = None) -> dict:
         "expires_at": expires_at,
         "is_active": k.get("is_active", True),
         "last_used": last_used,
+        "dataset_ids": k.get("dataset_ids", []),
+        "model_ids": k.get("model_ids", []),
     }
 
 
@@ -99,6 +101,8 @@ async def create_api_key(data: ApiKeyCreate, current_user=Depends(get_current_us
         "created_at": datetime.utcnow(),
         "last_used": None,
         "expires_at": expires_at,
+        "dataset_ids": data.dataset_ids or [],
+        "model_ids": data.model_ids or [],
     }
 
     result = await db.api_keys.insert_one(doc)

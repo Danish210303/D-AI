@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Key, Plus, Copy, Trash2, Shield, X, Check, Loader, AlertCircle, Edit2 } from 'lucide-react'
-import { apiKeyAPI } from '../services/api'
+import { apiKeyAPI, datasetAPI, modelAPI } from '../services/api'
 import { useApiKeyStore } from '../store'
 import toast from 'react-hot-toast'
 
@@ -14,12 +14,25 @@ export default function ApiKeysPage() {
   const [createdKeyData, setCreatedKeyData] = useState(null)
   
   const [copied, setCopied] = useState({})
-  const [newKey, setNewKey] = useState({ name: '', scopes: ['chat'], rate_limit: 10000 })
+  const [newKey, setNewKey] = useState({ name: '', scopes: ['chat'], rate_limit: 10000, dataset_ids: [], model_ids: [] })
 
   // Inline renaming states
   const [editingId, setEditingId] = useState(null)
   const [editingName, setEditingName] = useState("")
   const [creating, setCreating] = useState(false)
+
+  const [datasets, setDatasets] = useState([])
+  const [models, setModels] = useState([])
+
+  const getDatasetName = (id) => {
+    const d = datasets.find(x => x.id === id)
+    return d ? d.name : id
+  }
+
+  const getModelName = (id) => {
+    const m = models.find(x => x.id === id)
+    return m ? m.name : id
+  }
 
   const SCOPES = ['chat', 'predict', 'embed', 'transcribe', 'generate-image']
 
@@ -35,8 +48,22 @@ export default function ApiKeysPage() {
     }
   }
 
+  const fetchResources = async () => {
+    try {
+      const [dsRes, mdRes] = await Promise.all([
+        datasetAPI.list(),
+        modelAPI.list()
+      ])
+      setDatasets(dsRes.data || [])
+      setModels(mdRes.data || [])
+    } catch (err) {
+      console.error('Failed to fetch datasets/models:', err)
+    }
+  }
+
   useEffect(() => {
     fetchKeys()
+    fetchResources()
   }, [])
 
   const copyKey = (id, key) => {
@@ -94,10 +121,12 @@ export default function ApiKeysPage() {
         name: newKey.name,
         scopes: newKey.scopes,
         rate_limit: newKey.rate_limit,
+        dataset_ids: newKey.dataset_ids,
+        model_ids: newKey.model_ids,
       })
       setCreatedKeyData(data) // Triggers the warning display modal
       setShowCreate(false)
-      setNewKey({ name: '', scopes: ['chat'], rate_limit: 10000 })
+      setNewKey({ name: '', scopes: ['chat'], rate_limit: 10000, dataset_ids: [], model_ids: [] })
       toast.success('API key created successfully!')
       fetchKeys()
     } catch (err) {
@@ -178,6 +207,62 @@ export default function ApiKeysPage() {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+                    Restricted Datasets (Optional)
+                  </label>
+                  {datasets.length === 0 ? (
+                    <p className="text-xs italic" style={{ color: 'var(--text-muted)' }}>No datasets available</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2 max-h-[100px] overflow-y-auto p-2 border rounded" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
+                      {datasets.map(d => {
+                        const isSelected = newKey.dataset_ids.includes(d.id)
+                        return (
+                          <button key={d.id} type="button"
+                            onClick={() => {
+                              const dataset_ids = isSelected
+                                ? newKey.dataset_ids.filter(x => x !== d.id)
+                                : [...newKey.dataset_ids, d.id]
+                              setNewKey({ ...newKey, dataset_ids })
+                            }}
+                            className={`badge text-xs cursor-pointer transition-all ${isSelected ? 'badge-green' : ''}`}
+                            style={!isSelected ? { background: 'var(--bg-tertiary)', color: 'var(--text-muted)' } : {}}>
+                            {d.name}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+                    Restricted Models (Optional)
+                  </label>
+                  {models.length === 0 ? (
+                    <p className="text-xs italic" style={{ color: 'var(--text-muted)' }}>No models available</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2 max-h-[100px] overflow-y-auto p-2 border rounded" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
+                      {models.map(m => {
+                        const isSelected = newKey.model_ids.includes(m.id)
+                        return (
+                          <button key={m.id} type="button"
+                            onClick={() => {
+                              const model_ids = isSelected
+                                ? newKey.model_ids.filter(x => x !== m.id)
+                                : [...newKey.model_ids, m.id]
+                              setNewKey({ ...newKey, model_ids })
+                            }}
+                            className={`badge text-xs cursor-pointer transition-all ${isSelected ? 'badge-violet' : ''}`}
+                            style={!isSelected ? { background: 'var(--bg-tertiary)', color: 'var(--text-muted)' } : {}}>
+                            {m.name}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -334,6 +419,32 @@ export default function ApiKeysPage() {
                   </button>
                 )}
               </div>
+
+              {/* Bound Resources */}
+              {((k.dataset_ids && k.dataset_ids.length > 0) || (k.model_ids && k.model_ids.length > 0)) && (
+                <div className="mt-1 mb-3 text-xs space-y-1.5 p-2 rounded border" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
+                  {k.dataset_ids && k.dataset_ids.length > 0 && (
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-semibold text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>Allowed Datasets:</span>
+                      {k.dataset_ids.map(id => (
+                        <span key={id} className="badge badge-green text-[10px] py-0.5 px-1.5">
+                          {getDatasetName(id)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {k.model_ids && k.model_ids.length > 0 && (
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-semibold text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>Allowed Models:</span>
+                      {k.model_ids.map(id => (
+                        <span key={id} className="badge badge-violet text-[10px] py-0.5 px-1.5">
+                          {getModelName(id)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">

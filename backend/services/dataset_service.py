@@ -300,6 +300,15 @@ async def build_index_for_dataset(dataset_doc: dict, db) -> str:
             {"$set": {"status": "ready", "progress": 100.0, "chunk_count": len(chunks), "error": None}}
         )
         logger.info("Index status updated to READY")
+        
+        # Trigger auto API key generation
+        user_id = dataset_doc.get("user_id")
+        if user_id:
+            try:
+                await auto_generate_api_key_for_dataset(user_id, dataset_id, file_name, db)
+            except Exception as key_err:
+                logger.error(f"Failed to auto-generate API Key: {key_err}")
+
         logger.info(f"Successfully indexed dataset {dataset_id} with {len(chunks)} chunks using {index_type}.")
         return index_id
     except Exception as e:
@@ -319,3 +328,39 @@ async def build_index_for_dataset(dataset_doc: dict, db) -> str:
                 os.remove(temp_path)
             except Exception as clean_err:
                 logger.error(f"Failed to remove temp file {temp_path}: {clean_err}")
+
+
+async def auto_generate_api_key_for_dataset(user_id: str, dataset_id: str, dataset_name: str, db):
+    """Automatically generate an API key for the user upon completing indexing if none exists."""
+    # Check if there is already an active API key for this user linked to this dataset
+    existing_key = await db.api_keys.find_one({
+        "user_id": user_id,
+        "is_active": True,
+        "dataset_ids": dataset_id
+    })
+    if existing_key:
+        logger.info(f"API Key already exists for user {user_id} linked to dataset {dataset_id}")
+        return
+
+    from api.routes.api_keys import generate_api_key
+    full_key, prefix, key_hash = generate_api_key()
+    
+    doc = {
+        "user_id": user_id,
+        "name": f"Auto-Generated Key ({dataset_name[:25]})",
+        "key_prefix": prefix,
+        "key_hash": key_hash,
+        "scopes": ["chat", "predict", "embed"],
+        "rate_limit": 10000,
+        "requests_count": 0,
+        "status": "active",
+        "is_active": True,
+        "created_at": datetime.utcnow(),
+        "last_used": None,
+        "expires_at": None,
+        "dataset_ids": [dataset_id],
+        "model_ids": [],
+    }
+    
+    await db.api_keys.insert_one(doc)
+    logger.info(f"Automatically generated API Key for user {user_id} and dataset {dataset_id} (prefix: {prefix})")

@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from pydantic import BaseModel
-from auth.utils import get_current_user
+from auth.utils import get_current_user, verify_key_permissions
 from config import settings
 import logging, os, uuid, time, tempfile
 
@@ -101,10 +101,12 @@ async def get_google_data(query: str) -> dict:
 
 @router.post("/transcribe")
 async def transcribe_audio(
+    request: Request,
     file: UploadFile = File(...),
     language: str = Form("en"),
     current_user=Depends(get_current_user),
 ):
+    await verify_key_permissions(request, required_scopes=["transcribe"])
     ext = file.filename.split(".")[-1].lower()
     if ext not in ("mp3", "wav", "m4a", "ogg", "flac"):
         raise HTTPException(status_code=400, detail="Unsupported audio format")
@@ -238,7 +240,8 @@ async def extract_ocr(
 
 
 @router.post("/summarize")
-async def summarize_text(data: SummarizeRequest, current_user=Depends(get_current_user)):
+async def summarize_text(data: SummarizeRequest, request: Request, current_user=Depends(get_current_user)):
+    await verify_key_permissions(request, required_scopes=["chat"])
     start = time.time()
     try:
         import httpx
@@ -295,7 +298,8 @@ async def summarize_text(data: SummarizeRequest, current_user=Depends(get_curren
 
 
 @router.post("/generate-image")
-async def generate_image(data: GenerateImageRequest, current_user=Depends(get_current_user)):
+async def generate_image(data: GenerateImageRequest, request: Request, current_user=Depends(get_current_user)):
+    await verify_key_permissions(request, required_scopes=["generate-image"])
     start = time.time()
     search_data = await get_google_data(data.prompt)
     try:
@@ -339,9 +343,11 @@ async def generate_image(data: GenerateImageRequest, current_user=Depends(get_cu
 @router.post("/embed")
 async def create_embeddings(
     texts: list[str],
+    request: Request,
     model: str = "paraphrase-MiniLM-L3-v2",
     current_user=Depends(get_current_user),
 ):
+    await verify_key_permissions(request, required_scopes=["embed"])
     try:
         from vector_db.store import get_embedding_model
         st_model = get_embedding_model(model_name=model)

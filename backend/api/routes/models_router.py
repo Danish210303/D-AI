@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from datetime import datetime
 from typing import List
 import logging
 
 from models import TrainingConfig, TrainingJobResponse, ModelResponse, PredictRequest, PredictResponse
-from auth.utils import get_current_user
+from auth.utils import get_current_user, verify_key_permissions
 from database import get_db
 from training.trainer import start_training_job
 
@@ -184,7 +184,7 @@ async def delete_model(model_id: str, current_user=Depends(get_current_user)):
 
 
 @router.post("/{model_id}/predict")
-async def predict(model_id: str, request: PredictRequest, current_user=Depends(get_current_user)):
+async def predict(model_id: str, predict_request: PredictRequest, http_request: Request, current_user=Depends(get_current_user)):
     import time
     import os
     import pickle
@@ -199,6 +199,9 @@ async def predict(model_id: str, request: PredictRequest, current_user=Depends(g
     if m.get("status") != "ready":
         raise HTTPException(status_code=400, detail="Model not ready for inference")
 
+    # Enforce key bounds
+    await verify_key_permissions(http_request, required_scopes=["predict"], model_id=model_id)
+
     model_path = os.path.join(settings.UPLOAD_DIR, "../models_store", model_id, "model.pkl")
     
     if os.path.exists(model_path):
@@ -211,7 +214,7 @@ async def predict(model_id: str, request: PredictRequest, current_user=Depends(g
             categorical_cols = model_data["categorical_cols"]
             is_classification = model_data["is_classification"]
             
-            input_val = request.input
+            input_val = predict_request.input
             if isinstance(input_val, dict):
                 row = {}
                 for col in features:

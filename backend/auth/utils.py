@@ -223,6 +223,8 @@ async def get_current_user(
 
         # Set user in request state for subsequent lookups in this request
         request.state.user = user
+        if token.startswith("sk-"):
+            request.state.api_key = key_doc
         logger.info(f"get_current_user: Successfully authenticated user: {user.get('email')} (ID: {user_id})")
         return user
 
@@ -271,3 +273,47 @@ async def verify_api_key(api_key: str) -> Optional[Dict]:
         {"$set": {"last_used": now_utc, "last_used_at": now_utc}, "$inc": {"requests_count": 1}}
     )
     return key_doc
+
+
+async def verify_key_permissions(
+    request: Request,
+    required_scopes: Optional[list[str]] = None,
+    dataset_id: Optional[str] = None,
+    model_id: Optional[str] = None,
+):
+    """
+    Verify scope and resource bounds for API keys.
+    If authenticated via JWT (standard dashboard user session), bypass checks.
+    """
+    api_key = getattr(request.state, "api_key", None)
+    if not api_key:
+        return
+
+    # 1. Verify Scope
+    if required_scopes:
+        key_scopes = api_key.get("scopes", [])
+        if not any(scope in key_scopes for scope in required_scopes):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"API Key missing required scope. Required: one of {required_scopes}. Key scopes: {key_scopes}"
+            )
+
+    # 2. Verify Dataset Bounds
+    if dataset_id:
+        allowed_datasets = api_key.get("dataset_ids", [])
+        if allowed_datasets:
+            if dataset_id not in allowed_datasets:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="API Key is not authorized to access this dataset"
+                )
+
+    # 3. Verify Model Bounds
+    if model_id:
+        allowed_models = api_key.get("model_ids", [])
+        if allowed_models:
+            if model_id not in allowed_models:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="API Key is not authorized to access this model"
+                )
