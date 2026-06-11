@@ -6,18 +6,9 @@ from services.chroma_service import collection_is_empty
 logger = logging.getLogger(__name__)
 
 def dispatch_rebuild_task(dataset_id: str):
-    """Attempt to dispatch the rebuild task to Celery, with a local fallback."""
-    try:
-        from workers.tasks import rebuild_dataset_index_task
-        # Dispatch to Celery background task queue
-        rebuild_dataset_index_task.delay(dataset_id)
-        logger.info(f"Successfully dispatched rebuild task to Celery for dataset: {dataset_id}")
-    except Exception as e:
-        logger.warning(
-            f"Could not dispatch rebuild to Celery ({e}). "
-            f"Spawning delayed local background asyncio task instead..."
-        )
-        asyncio.create_task(run_rebuild_locally(dataset_id))
+    """Always rebuild index locally since ChromaDB SQLite persistence is local to the web container."""
+    logger.info(f"Startup recovery: Spawning local background task to rebuild index for dataset: {dataset_id}")
+    asyncio.create_task(run_rebuild_locally(dataset_id))
 
 async def run_rebuild_locally(dataset_id: str):
     """Local fallback runner that executes rebuilding after a warm-up delay."""

@@ -24,7 +24,7 @@ async def download_file_from_cloudinary(url: str) -> str:
     temp_file.close()
 
     async with httpx.AsyncClient() as client:
-        response = await client.get(url)
+        response = await client.get(url, timeout=60.0)
         if response.status_code != 200:
             raise Exception(f"Failed to download file from Cloudinary: {response.status_code}")
         with open(temp_path, "wb") as f:
