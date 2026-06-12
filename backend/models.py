@@ -279,34 +279,28 @@ class RAGChatRequest(BaseModel):
     temperature: float = 0.3
 
 
-# ─── API Keys ─────────────────────────────────────────────────────────────────
-
 class ApiKeyCreate(BaseModel):
     name: str
     scopes: List[str] = ["chat"]
-    rate_limit: int = 1000
+    rate_limit: int = 10000
     expires_in_days: Optional[int] = None
-    dataset_ids: Optional[List[str]] = None
-    model_ids: Optional[List[str]] = None
+    allowed_datasets: Optional[List[str]] = []
+    allowed_models: Optional[List[str]] = []
 
 
 class ApiKeyResponse(BaseModel):
     id: str
     name: str
     key: Optional[str] = None  # Only shown on creation
-    key_prefix: str
     scopes: List[str]
     rate_limit: int
-    requests_count: int = 0
-    status: str = "active"
-    user_id: str
-    created_at: datetime
-    last_used_at: Optional[datetime] = None
-    expires_at: Optional[datetime] = None
+    request_count: int = 0
     is_active: bool = True
+    created_at: datetime
     last_used: Optional[datetime] = None
-    dataset_ids: Optional[List[str]] = None
-    model_ids: Optional[List[str]] = None
+    user_id: str
+    allowed_datasets: List[str] = []
+    allowed_models: List[str] = []
 
 
 class ApiKeyUpdate(BaseModel):

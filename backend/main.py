@@ -12,6 +12,7 @@ import asyncio
 from config import settings
 from database import connect_db, disconnect_db
 from middleware import AuthMiddleware, RequestLoggingMiddleware
+from app.middleware.api_key_auth import APIKeyAuthMiddleware
 from api.routes.auth import router as auth_router
 from api.routes.chat import router as chat_router
 from api.routes.datasets import router as datasets_router
@@ -178,6 +179,9 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # 2. Authentication (attaches validated user to request.state.user)
 app.add_middleware(AuthMiddleware)
+
+# 2.5 API Key Authentication
+app.add_middleware(APIKeyAuthMiddleware)
 
 # 3. Request Logging & Manual CORS response injection on exceptions/streams
 app.add_middleware(RequestLoggingMiddleware)

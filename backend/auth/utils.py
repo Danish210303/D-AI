@@ -312,7 +312,7 @@ async def verify_key_permissions(
 
     # 2. Verify Dataset Bounds
     if dataset_id:
-        allowed_datasets = api_key.get("dataset_ids", [])
+        allowed_datasets = api_key.get("allowed_datasets", []) or api_key.get("dataset_ids", [])
         if allowed_datasets:
             allowed_datasets_str = [str(did) for did in allowed_datasets]
             if str(dataset_id) not in allowed_datasets_str:
@@ -323,7 +323,7 @@ async def verify_key_permissions(
 
     # 3. Verify Model Bounds
     if model_id:
-        allowed_models = api_key.get("model_ids", [])
+        allowed_models = api_key.get("allowed_models", []) or api_key.get("model_ids", [])
         if allowed_models:
             allowed_models_str = [str(mid) for mid in allowed_models]
             if str(model_id) not in allowed_models_str:

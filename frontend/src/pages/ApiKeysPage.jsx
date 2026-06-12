@@ -120,9 +120,9 @@ export default function ApiKeysPage() {
       const { data } = await apiKeyAPI.create({
         name: newKey.name,
         scopes: newKey.scopes,
-        rate_limit: newKey.rate_limit,
-        dataset_ids: newKey.dataset_ids,
-        model_ids: newKey.model_ids,
+        rate_limit: parseInt(newKey.rate_limit) || 10000,
+        allowed_datasets: newKey.dataset_ids || [],
+        allowed_models: newKey.model_ids || [],
       })
       setCreatedKeyData(data) // Triggers the warning display modal
       setShowCreate(false)
@@ -287,14 +287,14 @@ export default function ApiKeysPage() {
               className="card-elevated w-full max-w-lg p-6 space-y-4"
               onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between">
-                <h3 className="font-bold text-lg text-yellow-500" style={{ color: 'var(--text-primary)' }}>Copy your API Key</h3>
+                <h3 className="font-bold text-lg text-yellow-500" style={{ color: 'var(--text-primary)' }}>Copy your key now — it won't be shown again</h3>
                 <button onClick={() => setCreatedKeyData(null)} style={{ color: 'var(--text-muted)' }}><X size={18} /></button>
               </div>
 
               <div className="p-4 rounded-lg bg-yellow-950/20 border border-yellow-700/30 flex items-start gap-3">
                 <AlertCircle className="flex-shrink-0 mt-0.5" size={18} style={{ color: '#f59e0b' }} />
                 <div className="text-xs space-y-1">
-                  <p className="font-semibold text-yellow-500">Copy this key now — it will never be shown again</p>
+                  <p className="font-semibold text-yellow-500">Copy your key now — it won't be shown again</p>
                   <p style={{ color: 'var(--text-muted)' }}>
                     For security reasons, this key can only be displayed this one time. Save it in a password manager or secure vault. If you close this window, the key cannot be recovered.
                   </p>
@@ -409,34 +409,34 @@ export default function ApiKeysPage() {
               <div className="flex items-center justify-between gap-2 p-3 rounded-lg mb-3"
                 style={{ background: 'var(--bg-tertiary)', fontFamily: 'JetBrains Mono, monospace' }}>
                 <code className="text-xs flex-1 truncate" style={{ color: 'var(--text-secondary)' }}>
-                  {maskKey(k.key_prefix)}
+                  {k.key}
                 </code>
                 {k.is_active && (
-                  <button onClick={() => copyKey(k.id, maskKey(k.key_prefix))}
+                  <button onClick={() => copyKey(k.id, k.key)}
                     className="flex-shrink-0 p-1 text-slate-500 hover:text-slate-300 transition-colors"
-                    title="Copy Prefix">
+                    title="Copy Key">
                     <Copy size={13} />
                   </button>
                 )}
               </div>
 
               {/* Bound Resources */}
-              {((k.dataset_ids && k.dataset_ids.length > 0) || (k.model_ids && k.model_ids.length > 0)) && (
+              {((k.allowed_datasets && k.allowed_datasets.length > 0) || (k.allowed_models && k.allowed_models.length > 0)) && (
                 <div className="mt-1 mb-3 text-xs space-y-1.5 p-2 rounded border" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
-                  {k.dataset_ids && k.dataset_ids.length > 0 && (
+                  {k.allowed_datasets && k.allowed_datasets.length > 0 && (
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="font-semibold text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>Allowed Datasets:</span>
-                      {k.dataset_ids.map(id => (
+                      {k.allowed_datasets.map(id => (
                         <span key={id} className="badge badge-green text-[10px] py-0.5 px-1.5">
                           {getDatasetName(id)}
                         </span>
                       ))}
                     </div>
                   )}
-                  {k.model_ids && k.model_ids.length > 0 && (
+                  {k.allowed_models && k.allowed_models.length > 0 && (
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="font-semibold text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>Allowed Models:</span>
-                      {k.model_ids.map(id => (
+                      {k.allowed_models.map(id => (
                         <span key={id} className="badge badge-violet text-[10px] py-0.5 px-1.5">
                           {getModelName(id)}
                         </span>
@@ -456,13 +456,13 @@ export default function ApiKeysPage() {
                 <div className="flex items-center gap-4">
                   <div className="text-right">
                     <p className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>
-                      {k.requests_count.toLocaleString()} / {k.rate_limit.toLocaleString()}
+                      {k.request_count.toLocaleString()} / {k.rate_limit.toLocaleString()}
                     </p>
                     <p className="text-xs" style={{ color: 'var(--text-muted)' }}>requests</p>
                   </div>
                   <div className="w-20">
                     <div className="progress-bar">
-                      <div className="progress-fill" style={{ width: `${Math.min(100, (k.requests_count / k.rate_limit) * 100)}%` }} />
+                      <div className="progress-fill" style={{ width: `${Math.min(100, (k.request_count / k.rate_limit) * 100)}%` }} />
                     </div>
                   </div>
                   <div className="text-right min-w-[120px]">
