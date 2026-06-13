@@ -302,6 +302,13 @@ async def generate_image(data: GenerateImageRequest, request: Request, current_u
     await verify_key_permissions(request, required_scopes=["generate-image"])
     start = time.time()
     search_data = await get_google_data(data.prompt)
+    
+    # Parse dimensions
+    try:
+        w, h = [int(x) for x in data.size.split("x")]
+    except Exception:
+        w, h = 512, 512
+
     try:
         from diffusers import StableDiffusionPipeline
         import torch
@@ -310,7 +317,6 @@ async def generate_image(data: GenerateImageRequest, request: Request, current_u
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
         )
         pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
-        w, h = [int(x) for x in data.size.split("x")]
         image = pipe(data.prompt, num_inference_steps=data.steps, width=w, height=h).images[0]
 
         import base64, io
@@ -338,23 +344,19 @@ async def generate_image(data: GenerateImageRequest, request: Request, current_u
             
         # 1. Try Hugging Face Inference API if configured or using fallback
         if hf_token and not hf_token.startswith("hf_..."):
-            for model_id in ["black-forest-labs/FLUX.1-schnell", "runwayml/stable-diffusion-v1-5"]:
+            from huggingface_hub import InferenceClient
+            import io
+            
+            client = InferenceClient(token=hf_token)
+            for model_id in ["black-forest-labs/FLUX.1-schnell", "stabilityai/stable-diffusion-xl-base-1.0"]:
                 try:
-                    import httpx
-                    api_url = f"https://api-inference.huggingface.co/models/{model_id}"
-                    headers = {
-                        "Authorization": f"Bearer {hf_token}",
-                        "Content-Type": "application/json"
-                    }
-                    payload = {"inputs": data.prompt}
-                    async with httpx.AsyncClient(timeout=30) as client:
-                        resp = await client.post(api_url, json=payload, headers=headers)
-                        if resp.status_code == 200:
-                            img_bytes = resp.content
-                            used_api = f"Hugging Face ({model_id})"
-                            break
-                        else:
-                            logger.warning(f"HF model {model_id} failed with status {resp.status_code}: {resp.text}")
+                    # Request image using InferenceClient (handles routing to valid inference providers)
+                    image = client.text_to_image(data.prompt, model=model_id, width=w, height=h)
+                    buffer = io.BytesIO()
+                    image.save(buffer, format="PNG")
+                    img_bytes = buffer.getvalue()
+                    used_api = f"Hugging Face ({model_id})"
+                    break
                 except Exception as hf_model_err:
                     logger.warning(f"HF model {model_id} failed with exception: {hf_model_err}")
         
